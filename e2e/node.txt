@@ -1,0 +1,110 @@
+//package e2e
+//
+//import (
+//	"context"
+//	"encoding/json"
+//	"fmt"
+//	"github.com/denzelpenzel/nyx/internal/common"
+//	"github.com/denzelpenzel/nyx/internal/config"
+//	"github.com/denzelpenzel/nyx/internal/db"
+//	"github.com/denzelpenzel/nyx/internal/dyport"
+//	"github.com/denzelpenzel/nyx/internal/utils"
+//	"io"
+//	"net/http"
+//	"net/url"
+//	"strconv"
+//	"strings"
+//	"time"
+//)
+//
+//type Node struct {
+//	APIAddr string
+//	Dir     string
+//	DB      db.Cache
+//	Service *ser.Server
+//}
+//
+//type GetRequestType interface {
+//	server2.GetRequest | server2.GetsRequest | server2.SetRequest
+//}
+//
+//func (n *Node) postRequest(method string, u *url.URL, j string) (string, error) {
+//	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Second)
+//	defer cancel()
+//	req, err := http.NewRequestWithContext(ctx, method, u.String(), strings.NewReader(j))
+//	if err != nil {
+//		return "", err
+//	}
+//	req.Header.Set("Content-Type", "application-type/json")
+//	resp, err := http.DefaultClient.Do(req)
+//	if err != nil {
+//		return "", err
+//	}
+//	defer resp.Body.Close()
+//	b, err := io.ReadAll(resp.Body)
+//	if err != nil {
+//		return "", err
+//	}
+//	return string(b), err
+//}
+//
+//func (n *Node) getAPIURL(suffix string) (*url.URL, error) {
+//	host := fmt.Sprintf("http://%s", n.APIAddr)
+//	u, err := url.Parse(fmt.Sprintf("%s/api/%s", host, suffix))
+//	if err != nil {
+//		return nil, err
+//	}
+//	return u, nil
+//}
+//
+//func CreateNewNode(enableSingle bool) *Node {
+//	ctx := context.Background()
+//	node := &Node{
+//		Dir: utils.TempDir("db-interation-test-"),
+//	}
+//
+//	ports, err := dyport.AllocatePorts(2)
+//	if err != nil {
+//		return nil
+//	}
+//
+//	httpAddr, _ := utils.GetTCPAddr(fmt.Sprintf("localhost:%s", strconv.Itoa(ports[0])))
+//
+//	cfg := &config.Config{
+//		Environment: common.Local,
+//		ServerConfig: &config.ServerConfig{
+//			HTTPAddr: httpAddr,
+//		},
+//		DBConfig: &config.DBConfig{
+//			DBDir:  node.Dir,
+//			Backup: "",
+//		},
+//	}
+//
+//	dbNode, err := db.NewDB(ctx, cfg.DBConfig)
+//	if err != nil {
+//		return nil
+//	}
+//
+//	// launch server service
+//	node.Service = server2.New(ctx, cfg.ServerConfig, dbNode)
+//	if err := node.Service.Run(); err != nil {
+//		panic(fmt.Sprintf("failed to start HTTP service: %s", err.Error()))
+//	}
+//
+//	node.APIAddr = node.Service.Addr().String()
+//
+//	return node
+//}
+//
+//func handleRequest[T GetRequestType](n *Node, method string, suffix string, body T) (string, error) {
+//	j, err := json.Marshal(body)
+//	if err != nil {
+//		return "", err
+//	}
+//	u, err := n.getAPIURL(suffix)
+//	if err != nil {
+//		return "", err
+//	}
+//	return n.postRequest(method, u, string(j))
+//}

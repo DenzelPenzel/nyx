@@ -1,0 +1,9 @@
+.git/
+.dockerignore
+.gitignore
+zarf/docker/
+zarf/k8s/
+CONTRIBUTORS
+LICENSE
+makefile
+README.md
