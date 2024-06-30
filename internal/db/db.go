@@ -55,7 +55,7 @@ func NewDB(ctx context.Context, cfg *config.DBConfig) (DB, error) {
 		slaveAddr: cfg.Backup,
 	}
 
-	s, err := store.Open(store.Dir(cfg.DBDir), store.ExpireInterval(cfg.ExpireInterval))
+	s, err := store.Open(store.Dir(cfg.DataDir), store.ExpireInterval(cfg.ExpireInterval))
 	if err != nil {
 		return nil, err
 	}

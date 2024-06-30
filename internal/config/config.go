@@ -9,15 +9,14 @@ import (
 )
 
 type DBConfig struct {
-	DBDir          string
+	DataDir        string
 	Backup         string
 	ExpireInterval time.Duration
 }
 
 // ServerConfig ... Server configuration options
 type ServerConfig struct {
-	HTTPAddr      net.Addr
-	HTTPAdvertise *net.TCPAddr
+	HTTPAddr net.Addr
 
 	JoinServerHost string
 	JoinServerPort int
@@ -33,24 +32,22 @@ type Config struct {
 // NewConfig ... Initializer
 func NewConfig(c *cli.Context) *Config {
 	env := c.String("env")
-	dbDir := c.String("db-dir")
+	dataDir := c.String("data-dir")
 	backup := c.String("backup")
-	httpAddr, _ := utils.GetTCPAddr(c.String("server-addr"))
-	httpAdvertise, _ := utils.GetTCPAddr(c.String("server-advertise"))
+	httpAddr, _ := utils.GetTCPAddr(c.String("hostname"))
 	dbExpireInterval, _ := time.ParseDuration(c.String("db-expire-interval"))
 
 	config := &Config{
 		Environment: common.Env(env),
 
 		DBConfig: &DBConfig{
-			DBDir:          dbDir,
+			DataDir:        dataDir,
 			Backup:         backup,
 			ExpireInterval: dbExpireInterval,
 		},
 
 		ServerConfig: &ServerConfig{
-			HTTPAddr:      httpAddr,
-			HTTPAdvertise: httpAdvertise,
+			HTTPAddr: httpAddr,
 		},
 	}
 

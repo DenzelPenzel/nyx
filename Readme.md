@@ -40,12 +40,14 @@ To use the template, run the following command(s):
 
 **Easy Backups**
 
-**Support memcache protocol**
+**Support memcache text protocol**
+
+**Provide support for load and correctness testing client package**
 
 ## Contributing
 
-Nyx is an open source project under the Apache 2.0 license, and contributions are gladly welcomed!
-To submit your changes please open a pull request.
+Nyx is an open source project, and contributions are gladly welcomed!
+To submit your changes please check pull request rules and open a pull request.
 
 
 

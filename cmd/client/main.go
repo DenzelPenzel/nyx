@@ -64,7 +64,7 @@ func main() {
 			Usage: "Set up the number of workers",
 		},
 		&cli.StringFlag{
-			Name:  "server-addr",
+			Name:  "hostname",
 			Value: "localhost:4001",
 			Usage: "HTTP server bind address",
 		},
@@ -81,7 +81,7 @@ func main() {
 func run(c *cli.Context) {
 	pprofName := c.String("pprof-file")
 	numOps := c.Int("num-ops")
-	httpAddr, _ := utils.GetTCPAddr(c.String("server-addr"))
+	httpAddr, _ := utils.GetTCPAddr(c.String("hostname"))
 
 	f, err := os.Create(pprofName)
 	if err != nil {

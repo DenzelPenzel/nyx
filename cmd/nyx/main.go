@@ -24,8 +24,8 @@ func main() {
 		},
 		// db
 		&cli.StringFlag{
-			Name:  "db-dir",
-			Value: "-db-tmp-",
+			Name:  "data-dir",
+			Value: "-data-tmp-",
 			Usage: "Set the db dirname",
 		},
 		&cli.StringFlag{
@@ -39,27 +39,21 @@ func main() {
 			Value: "127.0.0.1:4002",
 			Usage: "slave TCP address",
 		},
-		&cli.Uint64Flag{
-			Name:  "keep-alive",
-			Value: 10,
-			Usage: "Keep-alive connection, in seconds",
-		},
 		&cli.StringFlag{
 			Name:  "backup",
 			Value: "",
 			Usage: "specify backup filename",
 		},
 		&cli.StringFlag{
-			Name:  "server-addr",
+			Name:  "hostname",
 			Value: "localhost:4001",
-			Usage: "HTTP server bind address",
+			Usage: "Addr to listen on for external connections",
 		},
 		&cli.StringFlag{
 			Name:  "db-expire-interval",
 			Value: "60s",
 			Usage: "Set the expiration interval for the keys",
 		},
-		// raft
 	}
 	a.Usage = "Fast db Application"
 	a.Description = "Fast db"
@@ -81,7 +75,7 @@ func RunFastCache(c *cli.Context) error {
 	logging.New(cfg.Environment)
 	logger := logging.WithContext(ctx)
 
-	app, shutDown, err := app.NewFastCacheApp(ctx, cfg)
+	a, shutDown, err := app.NewFastCacheApp(ctx, cfg)
 
 	if err != nil {
 		logger.Fatal("Error creating nyx application", zap.Error(err))
@@ -90,12 +84,12 @@ func RunFastCache(c *cli.Context) error {
 
 	logger.Info("Starting nyx server")
 
-	if err := app.Start(); err != nil {
+	if err := a.Start(); err != nil {
 		logger.Fatal("Error starting nyx server", zap.Error(err))
 		return err
 	}
 
-	app.ListenForShutdown(shutDown)
+	a.ListenForShutdown(shutDown)
 	logger.Debug("Waiting for all application threads to end")
 
 	logger.Info("Successful nyx shutdown")

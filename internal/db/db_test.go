@@ -20,8 +20,8 @@ func openDB() (db.DB, func(), error) {
 	cfg := &config.Config{
 		Environment: common.Local,
 		DBConfig: &config.DBConfig{
-			DBDir:  dirName,
-			Backup: "",
+			DataDir: dirName,
+			Backup:  "",
 		},
 	}
 	dbNode, err := db.NewDB(ctx, cfg.DBConfig)
