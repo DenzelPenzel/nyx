@@ -4,7 +4,8 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
 )
 
 type ResponderText struct {

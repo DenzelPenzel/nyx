@@ -4,16 +4,17 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"github.com/denzelpenzel/nyx/internal/db"
-	"github.com/denzelpenzel/nyx/internal/logging"
-	"github.com/denzelpenzel/nyx/internal/nyx"
-	"github.com/denzelpenzel/nyx/internal/proto"
-	"github.com/denzelpenzel/nyx/internal/proto/textprot"
-	"go.uber.org/zap"
 	"io"
 	"log"
 	"net"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/db"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"github.com/DenzelPenzel/nyx/internal/nyx"
+	"github.com/DenzelPenzel/nyx/internal/proto"
+	"github.com/DenzelPenzel/nyx/internal/proto/textprot"
+	"go.uber.org/zap"
 )
 
 // ListenConst is a constructor function for listener implementations
@@ -36,7 +37,11 @@ func (l *tcpListener) Accept() (net.Conn, error) {
 }
 
 func (l *tcpListener) Configure(conn net.Conn) (net.Conn, error) {
-	tcpRemote := conn.(*net.TCPConn)
+	tcpRemote, ok := conn.(*net.TCPConn)
+
+	if !ok {
+		return nil, errors.New("wrong conn type")
+	}
 
 	if err := tcpRemote.SetKeepAlive(true); err != nil {
 		return conn, err

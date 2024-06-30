@@ -21,6 +21,24 @@ To use the template, run the following command(s):
     * Using Make: `make run-app`
     * Direct Call: `./bin/nyx`
 
+3. To test local KVS instance, open the new terminal console and run Netcat.
+   ```bash
+   $ nc localhost 4001
+   > get abc
+   END
+   > set abc 0 0 5
+   > hello
+   STORED
+   > get abc
+   VALUE abc 0 5
+   hello
+   END
+   > delete abc
+   DELETED
+   > get abc
+   END
+   ```
+
 ## Key features
 
 **Persistent storage**:
@@ -40,12 +58,14 @@ To use the template, run the following command(s):
 
 **Easy Backups**
 
-**Support memcache protocol**
+**Support memcache text protocol**
+
+**Provide support for load and correctness testing client package**
 
 ## Contributing
 
-Nyx is an open source project under the Apache 2.0 license, and contributions are gladly welcomed!
-To submit your changes please open a pull request.
+Nyx is an open source project, and contributions are gladly welcomed!
+To submit your changes please check pull request rules and open a pull request.
 
 
 

@@ -1,23 +1,28 @@
 package store
 
 import (
-	"github.com/stretchr/testify/require"
+	"bytes"
 	"os"
 	"testing"
+
+	"github.com/google/btree"
+	"github.com/stretchr/testify/require"
 )
 
 var bucketDirName = "-db-test-bucket--tmp-"
 
+// Test_SingleBucketStore verifies that keys added via BucketPut
+// are stored with a composite key (bucket name + key) and retrievable
 func Test_SingleBucketStore(t *testing.T) {
-	err := os.RemoveAll(bucketDirName)
+	require.NoError(t, os.RemoveAll(bucketDirName))
 	defer os.RemoveAll(bucketDirName)
-	require.NoError(t, err)
 
-	s, err := Open(Dir(bucketDirName), ShardsCollision(0), ShardsTotal(1))
+	ds, err := NewDataStore(WithDirectory(bucketDirName), WithShardCollisionCount(0), WithTotalShards(1))
 	require.NoError(t, err)
+	defer ds.Close()
 
 	bucketName := "users"
-	b, err := s.Bucket(bucketName)
+	bucket, err := ds.Bucket(bucketName)
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -58,45 +63,62 @@ func Test_SingleBucketStore(t *testing.T) {
 		},
 	}
 
-	for _, ts := range testCases {
-		if ts.execute {
-			err := s.Put(b, ts.key, ts.val)
+	for _, tc := range testCases {
+		if tc.execute {
+			err := ds.BucketPut(bucket, tc.key, tc.val)
 			require.NoError(t, err)
 		} else {
-			v, err := s.Get(ts.key)
+			v, err := ds.Get(tc.key)
 			require.NoError(t, err)
-			require.Equal(t, ts.expected, string(v))
+			require.True(t, bytes.Equal([]byte(tc.expected), v))
 		}
 	}
+
+	var foundKeys []string
+	bucket.Index.Ascend(func(item btree.Item) bool {
+		foundKeys = append(foundKeys, string(item.(StringItem)))
+		return true
+	})
+
+	expectedKeys := []string{bucketName + "001", bucketName + "002", bucketName + "003"}
+	require.ElementsMatch(t, expectedKeys, foundKeys)
 }
 
 func Test_MultiBucketStore(t *testing.T) {
-	err := os.RemoveAll(bucketDirName)
+	require.NoError(t, os.RemoveAll(bucketDirName))
 	defer os.RemoveAll(bucketDirName)
-	require.NoError(t, err)
 
-	s, err := Open(Dir(bucketDirName), ShardsCollision(0), ShardsTotal(1))
+	ds, err := NewDataStore(WithDirectory(bucketDirName), WithShardCollisionCount(0), WithTotalShards(1))
 	require.NoError(t, err)
+	defer ds.Close()
 
+	// Create the first bucket and add a key/value pair
 	bucketName1 := "user_group1"
-	b1, err := s.Bucket(bucketName1)
+	b1, err := ds.Bucket(bucketName1)
+	require.NoError(t, err)
+	err = ds.BucketPut(b1, []byte("001"), []byte("elon"))
 	require.NoError(t, err)
 
-	err = s.Put(b1, []byte("001"), []byte("elon"))
-	require.NoError(t, err)
-
+	// Create a second bucket and add a different key/value pair
 	bucketName2 := "user_group2"
-	b2, err := s.Bucket(bucketName2)
+	b2, err := ds.Bucket(bucketName2)
+	require.NoError(t, err)
+	err = ds.BucketPut(b2, []byte("001"), []byte("alex"))
 	require.NoError(t, err)
 
-	err = s.Put(b2, []byte("001"), []byte("alex"))
-	require.NoError(t, err)
-
-	v, err := s.Get([]byte(bucketName1 + "001"))
+	// Verify that retrieving using the composite keys returns the correct values.
+	v, err := ds.Get([]byte(bucketName1 + "001"))
 	require.NoError(t, err)
 	require.Equal(t, "elon", string(v))
 
-	v, err = s.Get([]byte(bucketName2 + "001"))
+	v, err = ds.Get([]byte(bucketName2 + "001"))
 	require.NoError(t, err)
 	require.Equal(t, "alex", string(v))
+
+	// Add the new key
+	err = ds.BucketPut(b1, []byte("002"), []byte("sam"))
+	require.NoError(t, err)
+	v, err = ds.Get([]byte(bucketName1 + "002"))
+	require.NoError(t, err)
+	require.Equal(t, "sam", string(v))
 }

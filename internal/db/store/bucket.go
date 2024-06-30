@@ -2,36 +2,34 @@ package store
 
 import (
 	"errors"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/google/btree"
 	"slices"
 	"strings"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/google/btree"
 )
 
-// Str implements the Item interface for strings.
-type Str string
+type StringItem string
 
-// Less returns true if a < b.
-func (a Str) Less(b btree.Item) bool {
-	return a < b.(Str)
+func (a StringItem) Less(b btree.Item) bool {
+	return a < b.(StringItem)
 }
 
-var (
-	GlobalBucketKeysStore = []byte("[all_bucket_keys]")
-)
+var GlobalBucketsKey = []byte("[all_bucket_keys]")
 
-type BucketStore struct {
+type Bucket struct {
 	Name  string
-	Btree *btree.BTree
+	Index *btree.BTree
 }
 
-func (bkt *BucketStore) Put(key []byte) {
-	bkt.Btree.ReplaceOrInsert(Str(key))
+// AddKey adds a key to the bucket's index
+func (bkt *Bucket) AddKey(key []byte) {
+	bkt.Index.ReplaceOrInsert(StringItem(key))
 }
 
-// Bucket ... Create a new bucket in the memory index
-func (s *Store) Bucket(name string) (*BucketStore, error) {
-	val, err := s.Get(GlobalBucketKeysStore)
+// Bucket returns (or creates) a bucket with the given name.
+func (ds *DataStore) Bucket(name string) (*Bucket, error) {
+	val, err := ds.Get(GlobalBucketsKey)
 	if errors.Is(err, common.ErrKeyNotFound) {
 		err = nil
 	}
@@ -39,27 +37,24 @@ func (s *Store) Bucket(name string) (*BucketStore, error) {
 		return nil, err
 	}
 	keys := strings.Split(string(val), ",")
-	idx := slices.Index(keys, name)
 
-	if idx == -1 {
+	if slices.Index(keys, name) == -1 {
 		keys = append(keys, name)
-		err := s.Set(GlobalBucketKeysStore, []byte(strings.Join(keys, ",")), 0)
-		if err != nil {
+		if err := ds.Set(GlobalBucketsKey, []byte(strings.Join(keys, ",")), 0); err != nil {
 			return nil, err
 		}
 	}
 
-	return &BucketStore{Name: name, Btree: s.btree}, nil
+	return &Bucket{Name: name, Index: ds.btree}, nil
 }
 
-func (s *Store) Put(bucket *BucketStore, k, val []byte) error {
-	key := []byte(bucket.Name)
-	key = append(key, k...)
-	err := s.Set(key, val, 0)
-	if err != nil {
+// BucketPut stores a key/value pair under the given bucket.
+func (ds *DataStore) BucketPut(bucket *Bucket, key, value []byte) error {
+	compositeKey := append([]byte(bucket.Name), key...)
+	if err := ds.Set(compositeKey, value, 0); err != nil {
 		return err
 	}
-	// put key in index
-	bucket.Put(key)
+	// Update the bucket index
+	bucket.AddKey(compositeKey)
 	return nil
 }

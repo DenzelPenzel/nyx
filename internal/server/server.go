@@ -1,17 +1,18 @@
 package server
 
 import (
+	"errors"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/logging"
-	"github.com/denzelpenzel/nyx/internal/nyx"
-	"github.com/denzelpenzel/nyx/internal/proto"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"go.uber.org/zap"
 	"io"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"github.com/DenzelPenzel/nyx/internal/proto"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"go.uber.org/zap"
 )
 
-type SrvConst func(conns []io.Closer, rp proto.RequestParser, n nyx.NyxDB) Server
+type SrvConst func(conns []io.Closer, rp proto.RequestParser, n common.DBHandler) Server
 
 type Server interface {
 	Loop()
@@ -19,11 +20,11 @@ type Server interface {
 
 type DefaultServer struct {
 	rp    proto.RequestParser
-	n     nyx.NyxDB
+	n     common.DBHandler
 	conns []io.Closer
 }
 
-func NewServer(conns []io.Closer, rp proto.RequestParser, n nyx.NyxDB) Server {
+func NewServer(conns []io.Closer, rp proto.RequestParser, n common.DBHandler) Server {
 	return &DefaultServer{
 		n:     n,
 		rp:    rp,
@@ -36,7 +37,7 @@ func (s *DefaultServer) Loop() {
 
 	defer func() {
 		if r := recover(); r != nil {
-			if r != io.EOF {
+			if err, ok := r.(error); ok && !errors.Is(err, io.EOF) {
 				logger.Fatal("recover from runtime panic",
 					zap.Any("recover", r),
 					zap.String("path", utils.IdentifyPanic()),

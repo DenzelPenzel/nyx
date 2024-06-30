@@ -16,6 +16,24 @@ const (
 
 const VersionString = "0.1"
 
+type DBHandler interface {
+	Set(req SetRequest) error
+	Add(req SetRequest) error
+	Replace(req SetRequest) error
+	Append(req SetRequest) error
+	Prepend(req SetRequest) error
+	Delete(req DeleteRequest) error
+	Touch(req TouchRequest) error
+	Get(req GetRequest) error
+	GetE(req GetRequest) error
+	Gat(req GATRequest) error
+	Noop(req NoopRequest) error
+	Quit(req QuitRequest) error
+	Version(req VersionRequest) error
+	Unknown(req Request) error
+	Error(req Request, reqType RequestType, err error)
+}
+
 // Common metrics used across packages
 var (
 	ErrBadRequest = errors.New("CLIENT_ERROR bad request")
@@ -84,12 +102,6 @@ const (
 	// RequestGet represents both a single get and a multi-get, which take differen forms in
 	// different protocols. This means it can also be the accumulation of many GETQ commands.
 	RequestGet
-
-	// RequestGat is a get-and-touch operation that retrieves the information while updating the TTL
-	RequestGat
-
-	// RequestGetE is a custom get which returns the TTL remaining with the data
-	RequestGetE
 
 	// RequestSet is to insert a new piece of data unconditionally. What that means is different
 	// depending on L1 / L2 handling.
