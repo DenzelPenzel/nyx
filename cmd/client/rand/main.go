@@ -4,14 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"fmt"
-	"github.com/denzelpenzel/nyx/cmd/client/textprot"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/logging"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"github.com/urfave/cli"
-	"go.uber.org/zap"
+	"errors"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -19,6 +14,13 @@ import (
 	"runtime/pprof"
 	"sync"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/cmd/client/textprot"
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/urfave/cli"
+	"go.uber.org/zap"
 )
 
 var (
@@ -104,7 +106,7 @@ func run(c *cli.Context) {
 
 	opsPerTask := numOps / numCmds / numWorkers
 
-	fmt.Printf("Running %v ops total with:\n"+
+	log.Printf("Running %v ops total with:\n"+
 		"\t%v workers\n"+
 		"\ttotal commands %v\n"+
 		"\tusing the %v protocol\n"+
@@ -131,7 +133,7 @@ func run(c *cli.Context) {
 		connWg.Add(1)
 		conn, err := utils.Connect(httpAddr)
 		if err != nil {
-			fmt.Printf("Failed connect to %s error: %s\n", httpAddr.String(), err)
+			log.Printf("Failed connect to %s error: %s\n", httpAddr.String(), err)
 			i--
 			connWg.Add(-1)
 			continue
@@ -154,31 +156,31 @@ func run(c *cli.Context) {
 				hits[m.op] = append(hits[m.op], int(m.duration))
 			}
 
-			metricPool.Put(m)
+			metricPool.Put(m) //nolint:staticcheck //check pointer-like issue
 		}
 
 		for i, op := range allOps {
 			if i == 0 {
-				fmt.Println("===========Metrics===========")
+				log.Println("===========Metrics===========")
 			}
 			renderStats("hits", op, hits[op])
 			renderStats("misses", op, misses[op])
-			fmt.Println("=============================")
+			log.Println("=============================")
 		}
 
 		stats.Done()
 	}()
 
-	fmt.Println("Generate testing tasks...")
+	log.Println("Generate testing tasks...")
 	tasksWg.Wait()
 
-	fmt.Println("Tasks generation done")
+	log.Println("Tasks generation done")
 	close(tasks)
 
-	fmt.Println("Start tasks execution...")
+	log.Println("Start tasks execution...")
 	connWg.Wait()
 
-	fmt.Println("Execution done")
+	log.Println("Execution done")
 	close(metrics)
 
 	stats.Wait()
@@ -223,8 +225,8 @@ func execute(conn net.Conn, connWg *sync.WaitGroup, tasks <-chan *Task, metrics 
 		if err != nil {
 			if !common.IsMiss(err) {
 				// socket is closed
-				if err == io.EOF {
-					fmt.Printf("Failed to execute request: %s, key: %s, error: %v\n", item.Cmd, item.Key, err)
+				if errors.Is(err, io.EOF) {
+					log.Printf("Failed to execute request: %s, key: %s, error: %v\n", item.Cmd, item.Key, err)
 					return
 				}
 			}
@@ -249,17 +251,17 @@ func genData(cmd Op) []byte {
 
 func renderStats(t string, op Op, data []int) {
 	if len(data) == 0 {
-		fmt.Printf("\nNo %s %s\n", op.String(), t)
+		log.Printf("\nNo %s %s\n", op.String(), t)
 		return
 	}
 	s := GetStats(data)
-	fmt.Printf("%s %s (n = %d)\n", op.String(), t, len(data))
-	fmt.Printf("Min: %fms\n", s.Min)
-	fmt.Printf("Max: %fms\n", s.Max)
-	fmt.Printf("Avg: %fms\n", s.Avg)
-	fmt.Printf("p50: %fms\n", s.P50)
-	fmt.Printf("p75: %fms\n", s.P75)
-	fmt.Printf("p90: %fms\n", s.P90)
-	fmt.Printf("p95: %fms\n", s.P95)
-	fmt.Printf("p99: %fms\n", s.P99)
+	log.Printf("%s %s (n = %d)\n", op.String(), t, len(data))
+	log.Printf("Min: %fms\n", s.Min)
+	log.Printf("Max: %fms\n", s.Max)
+	log.Printf("Avg: %fms\n", s.Avg)
+	log.Printf("p50: %fms\n", s.P50)
+	log.Printf("p75: %fms\n", s.P75)
+	log.Printf("p90: %fms\n", s.P90)
+	log.Printf("p95: %fms\n", s.P95)
+	log.Printf("p99: %fms\n", s.P99)
 }

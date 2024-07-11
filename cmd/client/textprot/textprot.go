@@ -2,8 +2,9 @@ package textprot
 
 import (
 	"bufio"
+	"crypto/rand"
 	"fmt"
-	"math/rand/v2"
+	"math/big"
 	"strings"
 )
 
@@ -189,13 +190,18 @@ func (t TextProt) Delete(rw *bufio.ReadWriter, key []byte) error {
 func (t TextProt) Touch(rw *bufio.ReadWriter, key []byte) error {
 	strKey := string(key)
 
-	if _, err := fmt.Fprintf(rw, "touch %s %v\r\n", strKey, rand.IntN(maxTTL)); err != nil {
+	ttl, err := rand.Int(rand.Reader, big.NewInt(int64(maxTTL)))
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(rw, "touch %s %v\r\n", strKey, ttl); err != nil {
 		return err
 	}
 
 	rw.Flush()
 
-	_, err := rw.ReadString('\n')
+	_, err = rw.ReadString('\n')
 	if err != nil {
 		return err
 	}

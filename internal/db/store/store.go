@@ -4,15 +4,18 @@ import (
 	"compress/gzip"
 	"errors"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/db/store/shard"
-	"github.com/denzelpenzel/nyx/internal/interval"
-	"github.com/google/btree"
-	"github.com/spaolacci/murmur3"
 	"io"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/db/store/shard"
+	"github.com/DenzelPenzel/nyx/internal/interval"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"github.com/google/btree"
+	"github.com/spaolacci/murmur3"
+	"go.uber.org/zap"
 )
 
 type Store struct {
@@ -77,13 +80,6 @@ func ShardsTotal(shards int) OptStore {
 	}
 }
 
-func ShardPrefix(prefix string) OptStore {
-	return func(s *Store) error {
-		s.prefix = prefix
-		return nil
-	}
-}
-
 // SyncInterval - how often fsync do, default 0 - OS will do it
 func SyncInterval(interv time.Duration) OptStore {
 	return func(s *Store) error {
@@ -104,12 +100,16 @@ func SyncInterval(interv time.Duration) OptStore {
 
 func ExpireInterval(interv time.Duration) OptStore {
 	return func(s *Store) error {
+		logger := logging.NoContext()
 		s.expireInterval = interv
 		if interv > 0 {
 			s.expInterv = interval.SetInterval(func(_ time.Time) {
 				err := s.shards[s.expireShardSeq].ExpireKeys(interv)
 				if err != nil {
-					fmt.Printf("Error expire:%s\n", err)
+					logger.Warn("Error expire shard",
+						zap.Int("shard seq", s.expireShardSeq),
+						zap.Error(err),
+					)
 				}
 				s.expireShardSeq++
 				if s.expireShardSeq >= s.shardsCount {
@@ -143,7 +143,7 @@ func Open(opts ...OptStore) (*Store, error) {
 
 	stopWorkers := false
 	s.shards = make([]shard.Shard, s.shardsCount)
-	shChan := make(chan int, s.shardsCount)
+	shardsChan := make(chan int, s.shardsCount)
 	errChan := make(chan error, 4)
 
 	var wg sync.WaitGroup
@@ -151,19 +151,17 @@ func Open(opts ...OptStore) (*Store, error) {
 	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
-			for i := range shChan {
+			for i := range shardsChan {
 				if stopWorkers {
 					break
 				}
-
 				var filename string
 				if s.prefix != "" {
 					filename = fmt.Sprintf("%s/%s-%d", s.dir, s.prefix, i)
 				} else {
 					filename = fmt.Sprintf("%s/%d", s.dir, i)
 				}
-
-				err := s.shards[i].Run(filename)
+				err := s.shards[i].Open(filename)
 				if err != nil {
 					errChan <- err
 					stopWorkers = true
@@ -175,19 +173,16 @@ func Open(opts ...OptStore) (*Store, error) {
 	}
 
 	for i := range s.shards {
-		shChan <- i
+		shardsChan <- i
 	}
 
-	close(shChan)
-
+	close(shardsChan)
 	wg.Wait()
 
 	if len(errChan) > 0 {
 		err := <-errChan
 		return s, err
 	}
-
-	s.btree = btree.New(32)
 
 	return s, nil
 }
@@ -276,7 +271,6 @@ func (s *Store) Count() int {
 
 // Close ... close related shards
 func (s *Store) Close() error {
-	errStr := ""
 	if s.syncInterval > 0 {
 		s.interv.Clear()
 	}
@@ -286,12 +280,8 @@ func (s *Store) Close() error {
 	for i := range s.shards {
 		err := s.shards[i].Close()
 		if err != nil {
-			errStr += err.Error() + "\r\n"
 			return err
 		}
-	}
-	if errStr != "" {
-		return errors.New(errStr)
 	}
 	return nil
 }

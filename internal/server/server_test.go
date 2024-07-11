@@ -1,12 +1,13 @@
 package server_test
 
 import (
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/server"
-	"github.com/stretchr/testify/require"
 	"io"
 	"runtime"
 	"testing"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/server"
+	"github.com/stretchr/testify/require"
 )
 
 type ioCloserWrp struct {

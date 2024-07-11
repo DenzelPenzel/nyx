@@ -1,11 +1,12 @@
 package config
 
 import (
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"github.com/urfave/cli"
 	"net"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/urfave/cli"
 )
 
 type DBConfig struct {

@@ -2,7 +2,8 @@ package textprot
 
 import (
 	"bufio"
-	"github.com/denzelpenzel/nyx/internal/proto"
+
+	"github.com/DenzelPenzel/nyx/internal/proto"
 )
 
 // Components ... Holder for all the different protocol components in the textprot package

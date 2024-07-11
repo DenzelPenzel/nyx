@@ -1,4 +1,4 @@
-module github.com/denzelpenzel/nyx
+module github.com/DenzelPenzel/nyx
 
 go 1.22.0
 

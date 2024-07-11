@@ -2,15 +2,16 @@ package app
 
 import (
 	"context"
-	"github.com/denzelpenzel/nyx/internal/config"
-	"github.com/denzelpenzel/nyx/internal/db"
-	"github.com/denzelpenzel/nyx/internal/logging"
-	"github.com/denzelpenzel/nyx/internal/nyx"
-	"github.com/denzelpenzel/nyx/internal/server"
-	"go.uber.org/zap"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/internal/db"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"github.com/DenzelPenzel/nyx/internal/nyx"
+	"github.com/DenzelPenzel/nyx/internal/server"
+	"go.uber.org/zap"
 )
 
 // Application ... Pessimism app struct
@@ -35,13 +36,13 @@ func NewFastCacheApp(ctx context.Context, cfg *config.Config) (*Application, fun
 
 // Start ... Starts the application
 func (a *Application) Start() error {
-	// Run metrics server
-	// a.metrics.Run()
+	// Open metrics server
+	// a.metrics.Open()
 
-	// Run the API server
+	// Open the API server
 	go server.ListenAndServe(a.ctx, a.l, a.db, nyx.NewNyx)
 
-	// if err := a.server.Run(); err != nil {
+	// if err := a.server.Open(); err != nil {
 	// return err
 	// }
 

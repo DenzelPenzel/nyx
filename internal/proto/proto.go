@@ -2,7 +2,8 @@ package proto
 
 import (
 	"bufio"
-	"github.com/denzelpenzel/nyx/internal/common"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
 )
 
 type RequestParser interface {

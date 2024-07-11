@@ -3,7 +3,8 @@ package logging
 import (
 	"context"
 	"encoding/json"
-	"github.com/denzelpenzel/nyx/internal/common"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"

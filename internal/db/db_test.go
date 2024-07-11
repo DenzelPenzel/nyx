@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/config"
-	"github.com/denzelpenzel/nyx/internal/db"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"github.com/stretchr/testify/require"
 	"os"
 	"testing"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/internal/db"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/stretchr/testify/require"
 )
 
 func openDB() (db.DB, func(), error) {

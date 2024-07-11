@@ -4,15 +4,15 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"github.com/spaolacci/murmur3"
-	"github.com/stretchr/testify/require"
-	"github.com/tidwall/lotsa"
 	"os"
 	"runtime"
 	"testing"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/spaolacci/murmur3"
+	"github.com/stretchr/testify/require"
+	"github.com/tidwall/lotsa"
 )
 
 var dirName = "-db-tmp-test-"
@@ -113,18 +113,19 @@ func Test_ReadAfterClose(t *testing.T) {
 	require.Equal(t, 1, s.Count())
 }
 
-func Test_HashCollision(_ *testing.T) {
+func Test_HashCollision(t *testing.T) {
 	mapping := make(map[uint32]int, 100_000_000)
+	colCnt := 0
 	for i := 0; i < 100_000_000; i++ {
 		k1 := make([]byte, 8)
 		binary.BigEndian.PutUint64(k1, uint64(i))
 		h := murmur3.Sum32WithSeed(k1, 0)
-		if val, ok := mapping[h]; ok {
-			println("collision", h, i, val)
-			return
+		if _, ok := mapping[h]; ok {
+			colCnt++
 		}
 		mapping[h] = i
 	}
+	require.Equal(t, 0, colCnt)
 }
 
 func Test_ManyKeysOp(t *testing.T) {
@@ -142,8 +143,6 @@ func Test_ManyKeysOp(t *testing.T) {
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
 
-	fmt.Printf("Alloc = %v MiB Total = %v MiB\n", ms.Alloc/1024/1024, ms.TotalAlloc/1024/1024)
-	fmt.Print("Test Set key/val operation: ")
 	collCnt := 0
 	lotsa.Ops(n, workers, func(i, _ int) {
 		b := make([]byte, 8)
@@ -159,26 +158,22 @@ func Test_ManyKeysOp(t *testing.T) {
 	})
 
 	runtime.ReadMemStats(&ms)
-	fmt.Printf("Alloc = %v MiB Total = %v MiB Coll=%d\n", ms.Alloc/1024/1024, ms.TotalAlloc/1024/1024, collCnt)
-	fmt.Print("Test Get operation: ")
+
 	lotsa.Ops(n, workers, func(i, _ int) {
 		b, err := s.Get(keys[i])
 		if err != nil {
-			fmt.Printf("failed to get the key %s\n", string(keys[i]))
 			panic(err)
 		}
 
 		v := binary.BigEndian.Uint64(b)
 
 		if uint64(i) != v {
-			fmt.Printf("wrong key value, key: %s val: %d\n", string(keys[i]), v)
 			panic("wrong value")
 		}
 	})
 
 	runtime.ReadMemStats(&ms)
-	fmt.Printf("Alloc = %v MiB Total = %v MiB\n", ms.Alloc/1024/1024, ms.TotalAlloc/1024/1024)
-	fmt.Print("Test Delete operation: ")
+
 	lotsa.Ops(n, workers, func(i, _ int) {
 		_, err := s.Delete(keys[i])
 		// skip the ErrKeyNotFound issue check

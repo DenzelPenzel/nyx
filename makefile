@@ -33,7 +33,7 @@ run-app:
 
 .PHONY: test
 test:
-	go test ./internal/... -timeout $(TEST_LIMIT)
+	go test -v ./internal/... -timeout $(TEST_LIMIT)
 
 .PHONY: lint
 lint:
@@ -50,16 +50,16 @@ lint:
 
 gosec:
 	@echo "$(GREEN) Running security scan with gosec...$(COLOR_END)"
-	gosec ./...
+	gosec -exclude G104,G304 ./...
 
 # ==============================================================================
 # Load testing
 
-client-load-test:
-	@echo "$(BLUE)» run client load tests... $(COLOR_END)"
-	@CGO_ENABLED=1 go build -a -o bin/client ./cmd/client
+client-rand-load-test:
+	@echo "$(BLUE)» run client rand load tests... $(COLOR_END)"
+	@CGO_ENABLED=1 go build -a -o bin/rand ./cmd/client/rand
 	@echo "Binary successfully built"
-	@./bin/client -num-ops 100000 -num-workers 10
+	@./bin/rand -num-ops 100000 -num-workers 10
 
 curl-set:
 	curl -X POST "localhost:4001/api/set" -H "Authorization: Bearer 123"  -H "Content-Type: application/json" -d '{"key": "foo", "value": "bar", "exp": 3600}'

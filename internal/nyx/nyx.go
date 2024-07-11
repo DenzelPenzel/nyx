@@ -1,39 +1,21 @@
 package nyx
 
 import (
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/db"
-	"github.com/denzelpenzel/nyx/internal/proto"
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/db"
+	"github.com/DenzelPenzel/nyx/internal/proto"
 )
 
 type HandlerConst func() db.DB
 
-type NConst func(d db.DB, res proto.Responder) NyxDB
-
-type NyxDB interface {
-	Set(req common.SetRequest) error
-	Add(req common.SetRequest) error
-	Replace(req common.SetRequest) error
-	Append(req common.SetRequest) error
-	Prepend(req common.SetRequest) error
-	Delete(req common.DeleteRequest) error
-	Touch(req common.TouchRequest) error
-	Get(req common.GetRequest) error
-	GetE(req common.GetRequest) error
-	Gat(req common.GATRequest) error
-	Noop(req common.NoopRequest) error
-	Quit(req common.QuitRequest) error
-	Version(req common.VersionRequest) error
-	Unknown(req common.Request) error
-	Error(req common.Request, reqType common.RequestType, err error)
-}
+type NConst func(d db.DB, res proto.Responder) common.DBHandler
 
 type Nyx struct {
 	db  db.DB
 	res proto.Responder
 }
 
-func NewNyx(d db.DB, res proto.Responder) NyxDB {
+func NewNyx(d db.DB, res proto.Responder) common.DBHandler {
 	return &Nyx{
 		db:  d,
 		res: res,

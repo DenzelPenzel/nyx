@@ -2,12 +2,13 @@ package main
 
 import (
 	"context"
-	"github.com/denzelpenzel/nyx/internal/app"
-	"github.com/denzelpenzel/nyx/internal/config"
-	"github.com/denzelpenzel/nyx/internal/logging"
+	"os"
+
+	"github.com/DenzelPenzel/nyx/internal/app"
+	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/internal/logging"
 	"github.com/urfave/cli"
 	"go.uber.org/zap"
-	"os"
 )
 
 func main() {

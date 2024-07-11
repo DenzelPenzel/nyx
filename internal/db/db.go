@@ -3,11 +3,6 @@ package db
 import (
 	"context"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/config"
-	"github.com/denzelpenzel/nyx/internal/db/store"
-	"github.com/denzelpenzel/nyx/internal/logging"
-	"go.uber.org/zap"
 	"net"
 	"os"
 	"runtime/debug"
@@ -15,6 +10,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/internal/db/store"
+	"github.com/DenzelPenzel/nyx/internal/logging"
+	"go.uber.org/zap"
 )
 
 type DB interface {
@@ -50,7 +51,7 @@ type db struct {
 }
 
 func NewDB(ctx context.Context, cfg *config.DBConfig) (DB, error) {
-	c := &db{
+	d := &db{
 		ctx:       ctx,
 		slaveAddr: cfg.Backup,
 	}
@@ -59,15 +60,15 @@ func NewDB(ctx context.Context, cfg *config.DBConfig) (DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.store = s
+	// save the store pointer
+	d.store = s
 
 	debug.SetGCPercent(20)
-	atomic.StoreUint64(&c.getCnt, 0)
-	atomic.StoreUint64(&c.setCnt, 0)
+	atomic.StoreUint64(&d.getCnt, 0)
+	atomic.StoreUint64(&d.setCnt, 0)
+	d.stats = &stats{}
 
-	c.stats = &stats{}
-
-	return c, nil
+	return d, nil
 }
 
 func (c *db) Set(cmd common.SetRequest) error {

@@ -2,10 +2,11 @@ package store
 
 import (
 	"errors"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/google/btree"
 	"slices"
 	"strings"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/google/btree"
 )
 
 // Str implements the Item interface for strings.

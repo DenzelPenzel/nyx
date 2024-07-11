@@ -5,13 +5,14 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/common"
-	"github.com/denzelpenzel/nyx/internal/utils"
-	"github.com/spaolacci/murmur3"
 	"io"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/spaolacci/murmur3"
 )
 
 type Shard struct {
@@ -24,30 +25,124 @@ type Shard struct {
 
 var forceExit bool
 
-func getShardVer(file *os.File) (int, error) {
-	b := make([]byte, 2)
-	n, err := file.Read(b)
+// upgrade ... upgrade the file format
+func (s *Shard) upgrade(ver int, name string) error {
+	var newFile *os.File
+	newName := name + ".new"
+	newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(0644))
 	if err != nil {
-		return -1, err
+		return err
 	}
 
-	if n != 2 {
-		return -1, errors.New("short file")
+	// write the new version header
+	_, err = newFile.Write([]byte{versionMarker, currentShardVer})
+	if err != nil {
+		return err
 	}
 
-	if b[0] == versionMarker {
-		if b[1] == 0 || b[1] == deleted {
-			return 0, nil
+	seek := uint32(2)
+	oldSizeHead := sizeHeaders[ver]
+	sizeDiff := sizeHead - oldSizeHead
+
+	for {
+		header, err := readHeader(s.f, ver)
+		if err != nil {
+			newFile.Close()
+			return err
 		}
-		return int(b[1]), nil
+		if header == nil {
+			break
+		}
+		oldSizeData := (1 << header.sizeByte) - oldSizeHead
+		sizeb, size := utils.NextPowerOf2(sizeHead + uint32(header.keyLength) + header.valLength)
+		header.sizeByte = sizeb
+
+		b := make([]byte, size+sizeDiff)
+		writeHeader(b, header)
+		n, err := s.f.Read(b[sizeHead : sizeHead+oldSizeData])
+		if err != nil {
+			return err
+		}
+		if n != int(oldSizeData) {
+			return fmt.Errorf("wrong shart len: %d", n)
+		}
+
+		if header.status == deleted || (header.expire != 0 && int64(header.expire) < time.Now().Unix()) {
+			continue
+		}
+
+		startPos := int(sizeHead) + int(header.valLength)
+		endPos := int(sizeHead) + int(header.keyLength) + int(header.valLength)
+		h := murmur3.Sum32WithSeed(b[startPos:endPos], 0)
+
+		s.mapping[h] = Encode(seek, header.sizeByte, header.expire)
+		n, err = newFile.Write(b[0:size])
+		if err != nil {
+			return err
+		}
+		seek += uint32(n)
 	}
-	if b[1] == 0 || b[1] == deleted {
-		return 0, nil
+	// close old file
+	err = s.f.Close()
+	if err != nil {
+		return err
 	}
-	return -1, nil
+	// rewrite the ref to the new file
+	s.f = newFile
+	// remove the old file from the disk
+	err = os.Remove(name)
+	if err != nil {
+		return err
+	}
+	// rename the new file name to the old file name
+	err = os.Rename(newName, name)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-func (s *Shard) Run(name string) error {
+func (s *Shard) writeHeader(ver int, offset uint32) error {
+	for {
+		header, err := readHeader(s.f, ver)
+		if err != nil {
+			return err
+		}
+		if header == nil {
+			break
+		}
+		_, err = s.f.Seek(int64(header.valLength), 1)
+		if err != nil {
+			return err
+		}
+
+		// read key
+		key, err := s.readKey(header.keyLength)
+		if err != nil {
+			return err
+		}
+
+		shift := 1 << header.sizeByte
+		// skip empty tail
+		res, err := s.f.Seek(int64(shift-int(header.keyLength)-int(header.valLength)-int(sizeHead)), 1)
+		if err != nil {
+			return err
+		}
+
+		if header.status != deleted && (header.expire == 0 || int64(header.expire) >= time.Now().Unix()) {
+			h := murmur3.Sum32WithSeed(key, 0)
+			s.mapping[h] = Encode(offset, header.sizeByte, header.expire)
+		} else {
+			s.remapping[offset] = header.sizeByte
+		}
+
+		offset = uint32(res)
+	}
+
+	return nil
+}
+
+func (s *Shard) Open(name string) error {
 	s.Lock()
 	defer s.Unlock()
 
@@ -66,151 +161,44 @@ func (s *Shard) Run(name string) error {
 	s.f = f
 	s.mapping = make(map[uint32]uint64)
 	s.remapping = make(map[uint32]byte)
+	fi, err := s.f.Stat()
 
-	if fi, err := s.f.Stat(); err == nil {
-		// create a new file
-		if fi.Size() == 0 {
-			// write shard info to the file
-			_, err = s.f.Write([]byte{versionMarker, currentShardVer})
-			if err != nil {
-				return err
-			}
-			return nil
-		}
+	if err != nil {
+		return err
+	}
 
-		// read file
-		var seek uint32
-		ver, err := getShardVer(s.f)
+	// create a new file
+	if fi.Size() == 0 {
+		// write shard info to the file
+		_, err = s.f.Write([]byte{versionMarker, currentShardVer})
 		if err != nil {
 			return err
 		}
-
-		if ver < 0 || ver > currentShardVer {
-			return errors.New("unknown Shard version in file " + name)
-		}
-
-		if ver == 0 {
-			_, err = s.f.Seek(0, 0)
-			if err != nil {
-				return err
-			}
-		} else {
-			seek = 2
-		}
-
-		if ver > currentShardVer {
-			return fmt.Errorf("unsupported Shard: name: %s version: %d", name, ver)
-		}
-
-		if ver < currentShardVer {
-			var newFile *os.File
-			newName := name + ".new"
-			newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(0644))
-			if err != nil {
-				return err
-			}
-			// write version
-			_, err = newFile.Write([]byte{versionMarker, currentShardVer})
-			if err != nil {
-				return err
-			}
-			seek = 2
-			oldSizeHead := sizeHeaders[ver]
-			sizeDiff := sizeHead - oldSizeHead
-			for {
-				header, err := readHeader(s.f, ver)
-				if err != nil {
-					newFile.Close()
-					return err
-				}
-				if header == nil {
-					break
-				}
-				oldSizeData := (1 << header.sizeByte) - oldSizeHead
-				sizeb, size := utils.NextPowerOf2(sizeHead + uint32(header.keyLength) + header.valLength)
-				header.sizeByte = sizeb
-
-				b := make([]byte, size+sizeDiff)
-				writeHeader(b, header)
-				n, err := s.f.Read(b[sizeHead : sizeHead+oldSizeData])
-				if err != nil {
-					return err
-				}
-				if n != int(oldSizeData) {
-					return fmt.Errorf("wrong shart len: %d", n)
-				}
-
-				if header.status == deleted || (header.expire != 0 && int64(header.expire) < time.Now().Unix()) {
-					continue
-				}
-
-				startPos := int(sizeHead) + int(header.valLength)
-				endPos := int(sizeHead) + int(header.valLength) + int(header.keyLength)
-				h := murmur3.Sum32WithSeed(b[startPos:endPos], 0)
-
-				s.mapping[h] = Encode(seek, header.sizeByte, header.expire)
-				n, err = newFile.Write(b[0:size])
-				if err != nil {
-					return err
-				}
-				seek += uint32(n)
-			}
-
-			err = s.f.Close()
-			if err != nil {
-				return err
-			}
-
-			s.f = newFile
-			err = os.Remove(name)
-			if err != nil {
-				return err
-			}
-
-			err = os.Rename(newName, name)
-			if err != nil {
-				return err
-			}
-			return nil
-		}
-
-		for {
-			header, err := readHeader(s.f, ver)
-			if err != nil {
-				return err
-			}
-			if header == nil {
-				break
-			}
-
-			_, err = s.f.Seek(int64(header.valLength), 1)
-			if err != nil {
-				return err
-			}
-
-			// read key
-			key, err := s.readKey(header.keyLength)
-			if err != nil {
-				return err
-			}
-			shift := 1 << header.sizeByte
-			// skip empty tail
-			res, err := s.f.Seek(int64(shift-int(header.keyLength)-int(header.valLength)-int(sizeHead)), 1) // skip empty tail
-			if err != nil {
-				return err
-			}
-
-			if header.status != deleted && (header.expire == 0 || int64(header.expire) >= time.Now().Unix()) {
-				h := murmur3.Sum32WithSeed(key, 0)
-				s.mapping[h] = Encode(seek, header.sizeByte, header.expire)
-			} else {
-				s.remapping[seek] = header.sizeByte
-			}
-
-			seek = uint32(res)
-		}
+		return nil
 	}
-	return nil
+
+	// read file
+	var offset uint32
+	ver, err := getFileVer(s.f)
+	if err != nil {
+		return err
+	}
+
+	if ver < 0 || ver > currentShardVer {
+		return errors.New("unknown shard version in file " + name)
+	}
+
+	if ver == 0 {
+		s.f.Seek(0, 0)
+	} else {
+		offset = 2
+	}
+
+	if ver < currentShardVer {
+		return s.upgrade(ver, name)
+	}
+
+	return s.writeHeader(ver, offset)
 }
 
 func (s *Shard) readKey(keyLen uint16) ([]byte, error) {
@@ -355,7 +343,7 @@ func (s *Shard) write(k, v []byte, h, expire uint32) error {
 
 	if pos < 0 {
 		// append to the end of file
-		pos, err = s.f.Seek(0, 2)
+		pos, _ = s.f.Seek(0, 2)
 	}
 
 	_, err = s.f.WriteAt(b, pos)
@@ -439,12 +427,6 @@ func (s *Shard) get(k []byte, h uint32) ([]byte, *Header, error) {
 	}
 
 	return nil, nil, common.ErrKeyNotFound
-}
-
-func (s *Shard) length() int {
-	s.RLock()
-	defer s.RUnlock()
-	return len(s.mapping)
 }
 
 func (s *Shard) Close() error {

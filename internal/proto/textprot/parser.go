@@ -3,12 +3,13 @@ package textprot
 import (
 	"bufio"
 	"errors"
-	"github.com/denzelpenzel/nyx/internal/common"
 	"io"
 	"log"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/DenzelPenzel/nyx/internal/common"
 )
 
 type ParserText struct {

@@ -4,8 +4,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"github.com/denzelpenzel/nyx/internal/utils"
 	"io"
+
+	"github.com/DenzelPenzel/nyx/internal/utils"
 )
 
 const (

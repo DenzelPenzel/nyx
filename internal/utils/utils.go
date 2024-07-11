@@ -41,7 +41,6 @@ func GetTCPAddr(addr string) (*net.TCPAddr, error) {
 
 func TempDir(name string) string {
 	path, err := os.MkdirTemp("", name)
-	fmt.Printf("db path: %s\n", path)
 	if err != nil {
 		panic("failed to create temp dir")
 	}
