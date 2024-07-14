@@ -56,8 +56,8 @@ func main() {
 			Usage: "Set the expiration interval for the keys",
 		},
 	}
-	a.Usage = "Fast db Application"
-	a.Description = "Fast db"
+	a.Usage = "Nyx kvs"
+	a.Description = "High-speed, key-value storage"
 	a.Action = RunFastCache
 	a.Commands = []cli.Command{}
 
