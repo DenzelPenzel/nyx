@@ -21,6 +21,24 @@ To use the template, run the following command(s):
     * Using Make: `make run-app`
     * Direct Call: `./bin/nyx`
 
+3. To test local KVS instance, open the new terminal console and run Netcat.
+   ```bash
+   $ nc localhost 4001
+   > get abc
+   END
+   > set abc 0 0 5
+   > hello
+   STORED
+   > get abc
+   VALUE abc 0 5
+   hello
+   END
+   > delete abc
+   DELETED
+   > get abc
+   END
+   ```
+
 ## Key features
 
 **Persistent storage**:
