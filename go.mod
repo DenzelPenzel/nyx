@@ -3,7 +3,7 @@ module github.com/DenzelPenzel/nyx
 go 1.22.0
 
 require (
-	github.com/google/btree v1.1.2
+	github.com/google/btree v1.1.3
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/lotsa v1.0.3
