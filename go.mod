@@ -5,7 +5,7 @@ go 1.22.0
 require (
 	github.com/google/btree v1.1.3
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/tidwall/lotsa v1.0.3
 	github.com/urfave/cli v1.22.15
 	go.uber.org/zap v1.27.0
