@@ -21,7 +21,7 @@ func (o Op) String() string {
 	case Bget:
 		return "Batch Get"
 	case Delete:
-		return "Delete"
+		return "Remove"
 	case Touch:
 		return "Touch"
 	default:

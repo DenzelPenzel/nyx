@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/DenzelPenzel/nyx/config"
 	"github.com/DenzelPenzel/nyx/internal/common"
-	"github.com/DenzelPenzel/nyx/internal/config"
 	"github.com/DenzelPenzel/nyx/internal/db/store"
 	"github.com/DenzelPenzel/nyx/internal/logging"
 	"go.uber.org/zap"
@@ -47,16 +47,17 @@ type db struct {
 	updateAt  int64
 	ctx       context.Context
 	stats     *stats
-	store     *store.Store
+	store     *store.DataStore
 }
 
-func NewDB(ctx context.Context, cfg *config.DBConfig) (DB, error) {
+func NewDB(ctx context.Context, cfg config.DBConfig) (DB, error) {
 	d := &db{
 		ctx:       ctx,
 		slaveAddr: cfg.Backup,
 	}
 
-	s, err := store.Open(store.Dir(cfg.DataDir), store.ExpireInterval(cfg.ExpireInterval))
+	expireInterval := time.Duration(cfg.ExpireIntervalInSeconds) * time.Second
+	s, err := store.NewDataStore(store.WithDirectory(cfg.Dir), store.WithExpireInterval(expireInterval))
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +84,7 @@ func (c *db) Set(cmd common.SetRequest) error {
 func (c *db) Add(cmd common.SetRequest) error {
 	_, err := c.store.Get(cmd.Key)
 	if err == nil {
-		c.store.Delete(cmd.Key)
+		c.store.Remove(cmd.Key)
 		return common.ErrKeyExists
 	}
 
@@ -98,7 +99,7 @@ func (c *db) Add(cmd common.SetRequest) error {
 func (c *db) Replace(cmd common.SetRequest) error {
 	_, err := c.store.Get(cmd.Key)
 	if err != nil {
-		c.store.Delete(cmd.Key)
+		c.store.Remove(cmd.Key)
 		return common.ErrKeyNotFound
 	}
 
@@ -113,7 +114,7 @@ func (c *db) Replace(cmd common.SetRequest) error {
 func (c *db) Append(cmd common.SetRequest) error {
 	data, err := c.store.Get(cmd.Key)
 	if err != nil {
-		c.store.Delete(cmd.Key)
+		c.store.Remove(cmd.Key)
 		return common.ErrKeyNotFound
 	}
 	data = append(data, cmd.Data...)
@@ -123,7 +124,7 @@ func (c *db) Append(cmd common.SetRequest) error {
 func (c *db) Prepend(cmd common.SetRequest) error {
 	data, err := c.store.Get(cmd.Key)
 	if err != nil {
-		c.store.Delete(cmd.Key)
+		c.store.Remove(cmd.Key)
 		return common.ErrKeyNotFound
 	}
 	data = append(cmd.Data, data...)
@@ -137,7 +138,7 @@ func (c *db) Get(cmd common.GetRequest) (<-chan common.GetResponse, <-chan error
 	for idx, key := range cmd.Keys {
 		data, err := c.store.Get(key)
 		if err != nil {
-			c.store.Delete(key)
+			c.store.Remove(key)
 			dataOut <- common.GetResponse{
 				Miss:   true,
 				Quiet:  cmd.Quiet[idx],
@@ -170,7 +171,7 @@ func (c *db) GetE(cmd common.GetRequest) (<-chan common.GetEResponse, <-chan err
 		data, err := c.store.Get(key)
 
 		if err != nil {
-			c.store.Delete(key)
+			c.store.Remove(key)
 			dataOut <- common.GetEResponse{
 				Miss:   true,
 				Quiet:  cmd.Quiet[idx],
@@ -204,7 +205,7 @@ func (c *db) GAT(_ common.GATRequest) (common.GetResponse, error) {
 func (c *db) Delete(cmd common.DeleteRequest) error {
 	logger := logging.WithContext(c.ctx)
 	atomic.StoreInt64(&c.updateAt, time.Now().Unix())
-	deleted, err := c.store.Delete(cmd.Key)
+	deleted, err := c.store.Remove(cmd.Key)
 
 	if c.slaveAddr != "" && deleted && err == nil {
 		slaves := strings.Split(c.slaveAddr, ",")

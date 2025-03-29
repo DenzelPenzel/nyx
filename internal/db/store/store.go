@@ -2,6 +2,7 @@ package store
 
 import (
 	"compress/gzip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -18,188 +19,196 @@ import (
 	"go.uber.org/zap"
 )
 
-type Store struct {
+// DataStore is the main key/value store
+type DataStore struct {
 	sync.RWMutex
-	shards         []shard.Shard
-	shardsCount    int
-	prefix         string
-	shardColCnt    int
-	expireShardSeq int
+	shards              []shard.DataShard
+	totalShards         int
+	prefix              string
+	shardCollisionCount int
+	expireShardSeq      int
 
 	dir            string
 	syncInterval   time.Duration
-	interv         interval.Interval
+	syncTicker     *interval.IntervalRunner
 	expireInterval time.Duration
-	expInterv      interval.Interval
+	expireTicker   *interval.IntervalRunner
 	btree          *btree.BTree
 }
 
-// OptStore is a store options
-type OptStore func(*Store) error
+type StoreOption func(*DataStore) error
 
-func Dir(dir string) OptStore {
-	return func(s *Store) error {
+// WithDirectory sets the directory where shard files are stored
+func WithDirectory(dir string) StoreOption {
+	return func(ds *DataStore) error {
 		if dir == "" {
 			dir = "."
 		}
 		_, err := os.Stat(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
-				if dir != "." {
-					err = os.MkdirAll(dir, os.FileMode(0755))
-					if err != nil {
-						return err
-					}
+			if os.IsNotExist(err) && dir != "." {
+				err = os.MkdirAll(dir, os.FileMode(0755))
+				if err != nil {
+					return err
 				}
-			} else {
+			} else if err != nil {
 				return err
 			}
 		}
-		s.dir = dir
+		ds.dir = dir
 		return nil
 	}
 }
 
-// ShardsCollision ... Represents the number of shards used for resolving collisions
-// The default value is 4, which is suitable for handling more than 1 billion keys
-// with 8-byte alphabet keys without encountering collision errors.
-// It's important to note that different keys may result in the same hash value,
-// and collision shards are necessary for resolving such collisions without errors.
-// If ShardCollisionCnt is set to zero, ErrCollision will be returned in case of a collision
-func ShardsCollision(shards int) OptStore {
-	return func(s *Store) error {
-		s.shardColCnt = shards
+// WithShardCollisionCount sets the number of collision shards.
+// The default is 4; if set to zero, a collision will result in an error
+func WithShardCollisionCount(count int) StoreOption {
+	return func(ds *DataStore) error {
+		ds.shardCollisionCount = count
 		return nil
 	}
 }
 
-func ShardsTotal(shards int) OptStore {
-	return func(s *Store) error {
-		s.shardsCount = shards
+// WithTotalShards sets the total number of shards.
+// Ensure that totalShards > shardCollisionCount.
+func WithTotalShards(total int) StoreOption {
+	return func(ds *DataStore) error {
+		ds.totalShards = total
 		return nil
 	}
 }
 
-// SyncInterval - how often fsync do, default 0 - OS will do it
-func SyncInterval(interv time.Duration) OptStore {
-	return func(s *Store) error {
-		s.syncInterval = interv
-		if interv > 0 {
-			s.interv = interval.SetInterval(func(_ time.Time) {
-				for i := range s.shards {
-					err := s.shards[i].Fsync()
-					if err != nil {
-						panic(err)
+// WithSyncInterval sets up a background interval to fsync shards.
+// If interval > 0, a background task will periodically flush shard data.
+func WithSyncInterval(intervalDur time.Duration) StoreOption {
+	return func(ds *DataStore) error {
+		ds.syncInterval = intervalDur
+		if intervalDur > 0 {
+			ds.syncTicker = interval.NewIntervalRunner(func(_ time.Time) {
+				// Log and continue rather than panic on error.
+				for i := range ds.shards {
+					if err := ds.shards[i].Sync(); err != nil {
+						logging.NoContext().Error("Sync error",
+							zap.Int("shard", i),
+							zap.Error(err),
+						)
 					}
 				}
-			}, interv)
+			}, intervalDur)
 		}
 		return nil
 	}
 }
 
-func ExpireInterval(interv time.Duration) OptStore {
-	return func(s *Store) error {
-		logger := logging.NoContext()
-		s.expireInterval = interv
-		if interv > 0 {
-			s.expInterv = interval.SetInterval(func(_ time.Time) {
-				err := s.shards[s.expireShardSeq].ExpireKeys(interv)
+// WithExpireInterval sets up a background interval to expire keys.
+func WithExpireInterval(intervalDur time.Duration) StoreOption {
+	return func(ds *DataStore) error {
+		ds.expireInterval = intervalDur
+		if intervalDur > 0 {
+			ds.expireTicker = interval.NewIntervalRunner(func(_ time.Time) {
+				err := ds.shards[ds.expireShardSeq].ExpireExpiredKeys(intervalDur)
 				if err != nil {
-					logger.Warn("Error expire shard",
-						zap.Int("shard seq", s.expireShardSeq),
+					logging.NoContext().Warn("Expire error",
+						zap.Int("shard", ds.expireShardSeq),
 						zap.Error(err),
 					)
 				}
-				s.expireShardSeq++
-				if s.expireShardSeq >= s.shardsCount {
-					s.expireShardSeq = 0
-				}
-			}, interv)
+				ds.expireShardSeq = (ds.expireShardSeq + 1) % ds.totalShards
+			}, intervalDur)
 		}
 		return nil
 	}
 }
 
-func Open(opts ...OptStore) (*Store, error) {
-	s := &Store{
-		syncInterval:   0,
-		expireInterval: 0,
-		shardColCnt:    4,
-		shardsCount:    256,
-		btree:          btree.New(32),
+func NewDataStore(opts ...StoreOption) (*DataStore, error) {
+	ds := &DataStore{
+		syncInterval:        0,
+		expireInterval:      0,
+		shardCollisionCount: 4,
+		totalShards:         256,
+		btree:               btree.New(32),
 	}
 
 	for _, opt := range opts {
-		err := opt(s)
-		if err != nil {
+		if err := opt(ds); err != nil {
 			return nil, err
 		}
 	}
 
-	if s.shardsCount-s.shardColCnt < 1 {
-		return nil, errors.New("shardsCount must be more then shardColCount at min 1")
+	if ds.totalShards-ds.shardCollisionCount < 1 {
+		return nil, errors.New("totalShards must be greater than shardCollisionCount (min 1)")
 	}
 
-	stopWorkers := false
-	s.shards = make([]shard.Shard, s.shardsCount)
-	shardsChan := make(chan int, s.shardsCount)
-	errChan := make(chan error, 4)
+	ds.shards = make([]shard.DataShard, ds.totalShards)
+
+	// OpenShard shards concurrently using a worker pool
+	numWorkers := 4
+	indexCh := make(chan int, ds.totalShards)
+	errCh := make(chan error, numWorkers)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < numWorkers; i++ {
 		wg.Add(1)
 		go func() {
-			for i := range shardsChan {
-				if stopWorkers {
-					break
-				}
-				var filename string
-				if s.prefix != "" {
-					filename = fmt.Sprintf("%s/%s-%d", s.dir, s.prefix, i)
-				} else {
-					filename = fmt.Sprintf("%s/%d", s.dir, i)
-				}
-				err := s.shards[i].Open(filename)
-				if err != nil {
-					errChan <- err
-					stopWorkers = true
-					break
+			defer wg.Done()
+			for {
+				select {
+				case idx, ok := <-indexCh:
+					if !ok {
+						return
+					}
+					var filename string
+					if ds.prefix != "" {
+						filename = fmt.Sprintf("%s/%s-%d", ds.dir, ds.prefix, idx)
+					} else {
+						filename = fmt.Sprintf("%s/%d", ds.dir, idx)
+					}
+					if err := ds.shards[idx].OpenShard(filename); err != nil {
+						errCh <- err
+						cancel() // cancel other workers
+						return
+					}
+				case <-ctx.Done():
+					return
 				}
 			}
-			wg.Done()
 		}()
 	}
 
-	for i := range s.shards {
-		shardsChan <- i
+	// Send shard indices to workers
+	for i := 0; i < ds.totalShards; i++ {
+		indexCh <- i
 	}
 
-	close(shardsChan)
+	close(indexCh)
 	wg.Wait()
 
-	if len(errChan) > 0 {
-		err := <-errChan
-		return s, err
+	select {
+	case err := <-errCh:
+		return ds, err
+	default:
 	}
 
-	return s, nil
+	return ds, nil
 }
 
-func (s *Store) idx(h uint32) uint32 {
-	return uint32((int(h) % (s.shardsCount - s.shardColCnt)) + s.shardColCnt)
+// shardIndex computes the primary shard index for a given key hash
+func (ds *DataStore) shardIndex(hash uint32) uint32 {
+	return uint32((int(hash) % (ds.totalShards - ds.shardCollisionCount)) + ds.shardCollisionCount)
 }
 
-// Set ...store key and val in shard, max packet size 2^19, 512kb (524288)
+// Set stores the key and value with an expiration time (in seconds), max packet size 2^19, 512kb (524288)
 // packet size = len(key) + len(val) + 8
-func (s *Store) Set(key, val []byte, expire uint32) error {
-	h := murmur3.Sum32WithSeed(key, 0)
-	err := s.shards[s.idx(h)].Set(key, val, h, expire)
+func (ds *DataStore) Set(key, value []byte, expire uint32) error {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	err := ds.shards[ds.shardIndex(hash)].Set(key, value, hash, expire)
 	// handle collision issue
 	if errors.Is(err, common.ErrCollision) {
-		for i := 0; i < s.shardColCnt; i++ {
-			err = s.shards[i].Set(key, val, h, expire)
+		for i := 0; i < ds.shardCollisionCount; i++ {
+			err = ds.shards[i].Set(key, value, hash, expire)
 			if errors.Is(err, common.ErrCollision) {
 				continue
 			}
@@ -209,14 +218,14 @@ func (s *Store) Set(key, val []byte, expire uint32) error {
 	return err
 }
 
-// Touch ... update key expire time
-func (s *Store) Touch(key []byte, expire uint32) error {
-	h := murmur3.Sum32WithSeed(key, 0)
-	err := s.shards[s.idx(h)].Touch(key, h, expire)
+// Touch updates the expiration time of a key
+func (ds *DataStore) Touch(key []byte, expire uint32) error {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	err := ds.shards[ds.shardIndex(hash)].Touch(key, hash, expire)
 	// handle hash collision issue
 	if errors.Is(err, common.ErrCollision) {
-		for i := 0; i < s.shardColCnt; i++ {
-			err = s.shards[i].Touch(key, h, expire)
+		for i := 0; i < ds.shardCollisionCount; i++ {
+			err = ds.shards[i].Touch(key, hash, expire)
 			if errors.Is(err, common.ErrCollision) {
 				continue
 			}
@@ -226,119 +235,122 @@ func (s *Store) Touch(key []byte, expire uint32) error {
 	return err
 }
 
-func (s *Store) Get(key []byte) ([]byte, error) {
-	h := murmur3.Sum32WithSeed(key, 0)
-	v, _, err := s.shards[s.idx(h)].Get(key, h)
-	// handle collision issue
+// Get retrieves the value for a given key
+func (ds *DataStore) Get(key []byte) ([]byte, error) {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	val, _, err := ds.shards[ds.shardIndex(hash)].Get(key, hash)
 	if errors.Is(err, common.ErrCollision) {
-		for i := 0; i < s.shardColCnt; i++ {
-			v, _, err = s.shards[i].Get(key, h)
+		for i := 0; i < ds.shardCollisionCount; i++ {
+			val, _, err = ds.shards[i].Get(key, hash)
 			if errors.Is(err, common.ErrCollision) || errors.Is(err, common.ErrKeyNotFound) {
 				continue
 			}
 			break
 		}
 	}
-	return v, err
+	return val, err
 }
 
-func (s *Store) Delete(key []byte) (bool, error) {
-	h := murmur3.Sum32WithSeed(key, 0)
-	idx := s.idx(h)
-	isDeleted, err := s.shards[idx].Delete(key, h)
+// Remove deletes a key from the store
+func (ds *DataStore) Remove(key []byte) (bool, error) {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	idx := ds.shardIndex(hash)
+	deleted, err := ds.shards[idx].Delete(key, hash)
 	if errors.Is(err, common.ErrCollision) {
-		for i := 0; i < s.shardColCnt; i++ {
-			isDeleted, err = s.shards[i].Delete(key, h)
+		for i := 0; i < ds.shardCollisionCount; i++ {
+			deleted, err = ds.shards[i].Delete(key, hash)
 			if errors.Is(err, common.ErrCollision) || errors.Is(err, common.ErrKeyNotFound) {
 				continue
 			}
-			if isDeleted {
+			if deleted {
 				err = nil
 			}
 			break
 		}
 	}
-	return isDeleted, err
+	return deleted, err
 }
 
-func (s *Store) Count() int {
-	res := 0
-	for i := range s.shards {
-		res += s.shards[i].Count()
+// Count returns the total number of keys stored
+func (ds *DataStore) Count() int {
+	count := 0
+	for i := range ds.shards {
+		count += ds.shards[i].Count()
 	}
-	return res
+	return count
 }
 
-// Close ... close related shards
-func (s *Store) Close() error {
-	if s.syncInterval > 0 {
-		s.interv.Clear()
+// Close shuts down background tasks and closes all shard files
+func (ds *DataStore) Close() error {
+	if ds.syncInterval > 0 && ds.syncTicker != nil {
+		ds.syncTicker.Stop()
 	}
-	if s.expireInterval > 0 {
-		s.expInterv.Clear()
+	if ds.expireInterval > 0 && ds.expireTicker != nil {
+		ds.expireTicker.Stop()
 	}
-	for i := range s.shards {
-		err := s.shards[i].Close()
-		if err != nil {
+	for i := range ds.shards {
+		if err := ds.shards[i].Close(); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// FileSize ... total size of the disk storage used by the DB
-func (s *Store) FileSize() (int64, error) {
-	var res int64
-	for i := range s.shards {
-		sz, err := s.shards[i].FileSize()
+// FileSize returns the total disk storage size used by the shards.
+func (ds *DataStore) FileSize() (int64, error) {
+	var total int64
+	for i := range ds.shards {
+		sz, err := ds.shards[i].FileSize()
 		if err != nil {
 			return -1, err
 		}
-		res += sz
+		total += sz
 	}
-	return res, nil
+	return total, nil
 }
 
-func (s *Store) Incr(k []byte, v uint64) (uint64, error) {
-	h := murmur3.Sum32WithSeed(k, 0)
-	idx := s.idx(h)
-	return s.shards[idx].Counter(k, h, v, true)
+func (ds *DataStore) Increment(key []byte, v uint64) (uint64, error) {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	idx := ds.shardIndex(hash)
+	return ds.shards[idx].Counter(key, hash, v, true)
 }
 
-func (s *Store) Decr(k []byte, v uint64) (uint64, error) {
-	h := murmur3.Sum32WithSeed(k, 0)
-	idx := s.idx(h)
-	return s.shards[idx].Counter(k, h, v, false)
+func (ds *DataStore) Decrement(key []byte, v uint64) (uint64, error) {
+	hash := murmur3.Sum32WithSeed(key, 0)
+	idx := ds.shardIndex(hash)
+	return ds.shards[idx].Counter(key, hash, v, false)
 }
 
-func (s *Store) Backup(w io.Writer) error {
-	_, err := w.Write([]byte{1})
-	if err != nil {
+// Backup writes a backup of the store data to the provided writer
+func (ds *DataStore) Backup(w io.Writer) error {
+	if _, err := w.Write([]byte{1}); err != nil {
 		return err
 	}
-	for i := range s.shards {
-		err = s.shards[i].Backup(w)
-		if err != nil {
+	for i := range ds.shards {
+		if err := ds.shards[i].Backup(w); err != nil {
 			return err
 		}
 	}
-	return err
-}
-
-func (s *Store) BackupGZ(w io.Writer) error {
-	gz := gzip.NewWriter(w)
-	defer gz.Close()
-	return s.Backup(gz)
-}
-
-func (s *Store) Restore(_ io.Reader) error {
 	return nil
 }
 
-func (s *Store) Expire() error {
-	for i := range s.shards {
-		err := s.shards[i].ExpireKeys(time.Duration(0))
-		if err != nil {
+// BackupGZ writes a gzipped backup of the store
+func (ds *DataStore) BackupGZ(w io.Writer) error {
+	gz := gzip.NewWriter(w)
+	defer gz.Close()
+	return ds.Backup(gz)
+}
+
+// Restore restores the store from a backup
+// TODO: implement restore logic.
+func (ds *DataStore) Restore(r io.Reader) error {
+	return nil
+}
+
+// Expire triggers an immediate expiration check on all shards
+func (ds *DataStore) Expire() error {
+	for i := range ds.shards {
+		if err := ds.shards[i].ExpireExpiredKeys(0); err != nil {
 			return err
 		}
 	}

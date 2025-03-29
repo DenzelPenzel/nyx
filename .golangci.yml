@@ -200,6 +200,11 @@ issues:
   # Default: 3
   max-same-issues: 50
 
+  exclude-dirs:
+    - ".*(libexec|vendor|deps).*"
+    - "^/usr/local/go/.*"
+    - "^/opt/hostedtoolcache/go/.*"
+
   exclude-rules:
     - source: "(noinspection|TODO)"
       linters: [ godot ]

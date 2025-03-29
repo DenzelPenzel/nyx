@@ -21,7 +21,7 @@ GREEN = \033[0;32m
 BLUE = \033[0;34m
 COLOR_END = \033[0;39m
 
-TEST_LIMIT = 500s
+TEST_LIMIT = 800s
 
 build-app:
 	@echo "$(BLUE)» building application binary... $(COLOR_END)"

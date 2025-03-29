@@ -6,11 +6,12 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/config"
 	"github.com/DenzelPenzel/nyx/internal/db"
 	"github.com/DenzelPenzel/nyx/internal/logging"
 	"github.com/DenzelPenzel/nyx/internal/nyx"
 	"github.com/DenzelPenzel/nyx/internal/server"
+	"github.com/DenzelPenzel/nyx/internal/utils"
 	"go.uber.org/zap"
 )
 
@@ -23,26 +24,35 @@ type Application struct {
 }
 
 func NewFastCacheApp(ctx context.Context, cfg *config.Config) (*Application, func(), error) {
-	d, err := db.NewDB(ctx, cfg.DBConfig)
+	d, err := db.NewDB(ctx, cfg.DB)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	app := &Application{ctx: ctx, cfg: cfg, db: d}
-	app.l = server.TCPListener(cfg.ServerConfig.HTTPAddr)
+	addr, err := utils.GetTCPAddr(cfg.App.BaseAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	app := &Application{
+		ctx: ctx,
+		cfg: cfg,
+		db:  d,
+		l:   server.TCPListener(addr),
+	}
 
 	return app, func() {}, nil
 }
 
 // Start ... Starts the application
 func (a *Application) Start() error {
-	// Open metrics server
-	// a.metrics.Open()
+	// OpenShard metrics server
+	// a.metrics.OpenShard()
 
-	// Open the API server
+	// OpenShard the API server
 	go server.ListenAndServe(a.ctx, a.l, a.db, nyx.NewNyx)
 
-	// if err := a.server.Open(); err != nil {
+	// if err := a.server.OpenShard(); err != nil {
 	// return err
 	// }
 

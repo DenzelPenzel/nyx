@@ -11,41 +11,42 @@ import (
 	"time"
 
 	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/db/store/record_header"
+	"github.com/DenzelPenzel/nyx/internal/db/store/record_meta"
 	"github.com/DenzelPenzel/nyx/internal/utils"
 	"github.com/spaolacci/murmur3"
 )
 
-type Shard struct {
+type DataShard struct {
 	sync.RWMutex
-	f         *os.File          // file storage
-	mapping   map[uint32]uint64 // keys mapping
-	remapping map[uint32]byte   // space remapping: addr /size
-	useFsync  bool
+	file       *os.File          // file storage
+	recordMap  map[uint32]uint64 // mapping: key hash -> encoded record (position, size, Expire)
+	freeSpaces map[uint32]byte   // free space map: position -> size bucket available for reuse
+	syncFSync  bool              // flag to trigger fsync on next sync
+	exitExpire bool              // flag to signal expiration routine to exit
 }
 
-var forceExit bool
-
-// upgrade ... upgrade the file format
-func (s *Shard) upgrade(ver int, name string) error {
-	var newFile *os.File
-	newName := name + ".new"
-	newFile, err := os.OpenFile(newName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(0644))
+// upgradeFileFormat upgrades the file format from an older version to the current one.
+func (ds *DataShard) upgradeFileFormat(oldVer int, filename string) error {
+	newFilename := filename + ".new"
+	newFile, err := os.OpenFile(newFilename, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(0644))
 	if err != nil {
 		return err
 	}
 
-	// write the new version header
-	_, err = newFile.Write([]byte{versionMarker, currentShardVer})
+	// writeRecord the new version header
+	_, err = newFile.Write([]byte{record_header.RecordVersionMarker, record_header.CurrentRecordVersion})
 	if err != nil {
+		newFile.Close()
 		return err
 	}
 
-	seek := uint32(2)
-	oldSizeHead := sizeHeaders[ver]
-	sizeDiff := sizeHead - oldSizeHead
+	newOffset := uint32(2)
+	oldSizeHead := record_header.HeaderSizes[oldVer]
+	sizeDiff := record_header.HeaderFixedSize - oldSizeHead
 
 	for {
-		header, err := readHeader(s.f, ver)
+		header, err := record_header.ReadRecordHeader(ds.file, oldVer)
 		if err != nil {
 			newFile.Close()
 			return err
@@ -53,205 +54,201 @@ func (s *Shard) upgrade(ver int, name string) error {
 		if header == nil {
 			break
 		}
-		oldSizeData := (1 << header.sizeByte) - oldSizeHead
-		sizeb, size := utils.NextPowerOf2(sizeHead + uint32(header.keyLength) + header.valLength)
-		header.sizeByte = sizeb
+		oldDataSize := (1 << header.SizeByte) - oldSizeHead
+		newSizeByte, newSize := utils.NextPowerOf2(record_header.HeaderFixedSize + uint32(header.KeyLength) + header.ValLength)
+		header.SizeByte = newSizeByte
 
-		b := make([]byte, size+sizeDiff)
-		writeHeader(b, header)
-		n, err := s.f.Read(b[sizeHead : sizeHead+oldSizeData])
+		buffer := make([]byte, newSize+sizeDiff)
+		record_header.WriteRecordHeader(buffer, header)
+		n, err := ds.file.Read(buffer[record_header.HeaderFixedSize : record_header.HeaderFixedSize+oldDataSize])
 		if err != nil {
+			newFile.Close()
 			return err
 		}
-		if n != int(oldSizeData) {
-			return fmt.Errorf("wrong shart len: %d", n)
+		if n != int(oldDataSize) {
+			newFile.Close()
+			return fmt.Errorf("invalid shard record length: expected %d, got %d", oldDataSize, n)
 		}
 
-		if header.status == deleted || (header.expire != 0 && int64(header.expire) < time.Now().Unix()) {
+		// Skip records marked as RecordDeletedMarker or expired
+		if header.Status == record_header.RecordDeletedMarker || (header.Expire != 0 && int64(header.Expire) < time.Now().Unix()) {
 			continue
 		}
 
-		startPos := int(sizeHead) + int(header.valLength)
-		endPos := int(sizeHead) + int(header.keyLength) + int(header.valLength)
-		h := murmur3.Sum32WithSeed(b[startPos:endPos], 0)
+		startPos := int(record_header.HeaderFixedSize) + int(header.ValLength)
+		endPos := int(record_header.HeaderFixedSize) + int(header.KeyLength) + int(header.ValLength)
 
-		s.mapping[h] = Encode(seek, header.sizeByte, header.expire)
-		n, err = newFile.Write(b[0:size])
+		hash := murmur3.Sum32WithSeed(buffer[startPos:endPos], 0)
+
+		ds.recordMap[hash] = record_meta.Encode(newOffset, header.SizeByte, header.Expire)
+		n, err = newFile.Write(buffer[0:newSize])
 		if err != nil {
+			newFile.Close()
 			return err
 		}
-		seek += uint32(n)
+		newOffset += uint32(n)
 	}
-	// close old file
-	err = s.f.Close()
-	if err != nil {
+
+	// Close old file
+	if err := ds.file.Close(); err != nil {
+		newFile.Close()
 		return err
 	}
-	// rewrite the ref to the new file
-	s.f = newFile
+
+	// Replace old file with new file
+	ds.file = newFile
 	// remove the old file from the disk
-	err = os.Remove(name)
-	if err != nil {
+	if err := os.Remove(filename); err != nil {
 		return err
 	}
-	// rename the new file name to the old file name
-	err = os.Rename(newName, name)
-	if err != nil {
-		return err
-	}
-	return nil
+	// rename the new file filename to the old file filename
+	return os.Rename(newFilename, filename)
 }
 
-func (s *Shard) writeHeader(ver int, offset uint32) error {
+func (ds *DataShard) processHeaders(ver int, offset uint32) error {
 	for {
-		header, err := readHeader(s.f, ver)
+		header, err := record_header.ReadRecordHeader(ds.file, ver)
 		if err != nil {
 			return err
 		}
 		if header == nil {
 			break
 		}
-		_, err = s.f.Seek(int64(header.valLength), 1)
-		if err != nil {
+
+		if _, err := ds.file.Seek(int64(header.ValLength), io.SeekCurrent); err != nil {
 			return err
 		}
 
 		// read key
-		key, err := s.readKey(header.keyLength)
+		key, err := ds.readKeyData(header.KeyLength)
 		if err != nil {
 			return err
 		}
 
-		shift := 1 << header.sizeByte
-		// skip empty tail
-		res, err := s.f.Seek(int64(shift-int(header.keyLength)-int(header.valLength)-int(sizeHead)), 1)
+		shift := 1 << header.SizeByte
+
+		// Skip the tail padding
+		pos, err := ds.file.Seek(int64(shift-int(header.KeyLength)-int(header.ValLength)-int(record_header.HeaderFixedSize)), io.SeekCurrent)
 		if err != nil {
 			return err
 		}
 
-		if header.status != deleted && (header.expire == 0 || int64(header.expire) >= time.Now().Unix()) {
+		if header.Status != record_header.RecordDeletedMarker && (header.Expire == 0 || int64(header.Expire) >= time.Now().Unix()) {
 			h := murmur3.Sum32WithSeed(key, 0)
-			s.mapping[h] = Encode(offset, header.sizeByte, header.expire)
+			ds.recordMap[h] = record_meta.Encode(offset, header.SizeByte, header.Expire)
 		} else {
-			s.remapping[offset] = header.sizeByte
+			ds.freeSpaces[offset] = header.SizeByte
 		}
 
-		offset = uint32(res)
+		// ????
+		offset = uint32(pos)
 	}
 
 	return nil
 }
 
-func (s *Shard) Open(name string) error {
-	s.Lock()
-	defer s.Unlock()
+// OpenShard opens (or creates) the shard file and initializes the in-memory index
+func (ds *DataShard) OpenShard(filename string) error {
+	ds.Lock()
+	defer ds.Unlock()
 
-	forceExit = false
+	ds.exitExpire = false
 
-	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, os.FileMode(0644))
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, os.FileMode(0644))
 	if err != nil {
 		return err
 	}
 
-	err = f.Sync()
-	if err != nil {
+	if err := f.Sync(); err != nil {
+		f.Close()
 		return err
 	}
 
-	s.f = f
-	s.mapping = make(map[uint32]uint64)
-	s.remapping = make(map[uint32]byte)
-	fi, err := s.f.Stat()
+	ds.file = f
+	ds.recordMap = make(map[uint32]uint64)
+	ds.freeSpaces = make(map[uint32]byte)
 
+	fi, err := ds.file.Stat()
 	if err != nil {
 		return err
 	}
 
 	// create a new file
 	if fi.Size() == 0 {
-		// write shard info to the file
-		_, err = s.f.Write([]byte{versionMarker, currentShardVer})
-		if err != nil {
-			return err
-		}
-		return nil
+		// New file: writeRecord version header.
+		_, err = ds.file.Write([]byte{record_header.RecordVersionMarker, record_header.CurrentRecordVersion})
+		return err
 	}
 
 	// read file
 	var offset uint32
-	ver, err := getFileVer(s.f)
+	ver, err := record_meta.ReadFileVersion(ds.file)
 	if err != nil {
 		return err
 	}
-
-	if ver < 0 || ver > currentShardVer {
-		return errors.New("unknown shard version in file " + name)
+	if ver < 0 || ver > record_header.CurrentRecordVersion {
+		return errors.New("unknown shard version in file " + filename)
 	}
-
 	if ver == 0 {
-		s.f.Seek(0, 0)
+		ds.file.Seek(0, 0)
 	} else {
 		offset = 2
 	}
-
-	if ver < currentShardVer {
-		return s.upgrade(ver, name)
+	if ver < record_header.CurrentRecordVersion {
+		return ds.upgradeFileFormat(ver, filename)
 	}
-
-	return s.writeHeader(ver, offset)
+	return ds.processHeaders(ver, offset)
 }
 
-func (s *Shard) readKey(keyLen uint16) ([]byte, error) {
+func (ds *DataShard) readKeyData(keyLen uint16) ([]byte, error) {
 	key := make([]byte, keyLen)
-	n, err := s.f.Read(key)
+	n, err := ds.file.Read(key)
 	if err != nil {
 		return nil, err
 	}
 	if n != int(keyLen) {
-		return nil, fmt.Errorf("invalid read length n != key: %d", n)
+		return nil, fmt.Errorf("invalid key read length: expected %d, got %d", keyLen, n)
 	}
 	return key, nil
 }
 
-// Fsync ... Commit the current state to the persistent storage
-func (s *Shard) Fsync() error {
-	if s.useFsync {
-		s.Lock()
-		defer s.Unlock()
-		s.useFsync = false
-		return s.f.Sync()
+// Sync persists pending changes if needed
+func (ds *DataShard) Sync() error {
+	if ds.syncFSync {
+		ds.Lock()
+		defer ds.Unlock()
+		ds.syncFSync = false
+		return ds.file.Sync()
 	}
 	return nil
 }
 
-func (s *Shard) ExpireKeys(maxRuntime time.Duration) error {
+// ExpireExpiredKeys scans for expired records and removes them from the index
+func (ds *DataShard) ExpireExpiredKeys(maxRuntime time.Duration) error {
 	startTime := time.Now().UnixMilli()
-	current := startTime / 1000
+	currentSec := startTime / 1000
 	expired := make([]uint32, 0, 1024)
 
 	if maxRuntime.Seconds() > 1000 {
-		maxRuntime = time.Duration(1000) * time.Second
+		maxRuntime = 1000 * time.Second
 	}
-
 	endTime := startTime + maxRuntime.Milliseconds()
 
-	s.RLock()
-
-	for key, val := range s.mapping {
-		_, _, expire := Decode(val)
-		if expire != 0 && current > int64(expire) {
-			expired = append(expired, key)
+	ds.RLock()
+	for h, val := range ds.recordMap {
+		_, _, expire := record_meta.Decode(val)
+		if expire != 0 && currentSec > int64(expire) {
+			expired = append(expired, h)
 		}
 	}
 
-	s.RUnlock()
+	ds.RUnlock()
 	if len(expired) == 0 {
 		return nil
 	}
 
 	sleepTime := maxRuntime.Milliseconds() / int64(len(expired)) / 2
 	totalBulk := 1
-
 	if sleepTime < 1 {
 		totalBulk = len(expired)/int(maxRuntime.Milliseconds()+1) + 1
 		sleepTime = 1
@@ -259,82 +256,76 @@ func (s *Shard) ExpireKeys(maxRuntime time.Duration) error {
 		sleepTime = 10
 	}
 
-	if maxRuntime == time.Duration(0) {
+	if maxRuntime == 0 {
 		totalBulk = 1000
 		sleepTime = 0
 		endTime = startTime + 300000
 	}
 
-	s.Lock()
+	ds.Lock()
 
-	cnt := 0
 	bulkCount := 0
 	for _, h := range expired {
-		if forceExit || time.Now().UnixMilli() >= endTime {
+		if ds.exitExpire || time.Now().UnixMilli() >= endTime {
 			break
 		}
-		cnt++
-		data, ok := s.mapping[h]
-		if ok {
-			addr, sizeb, expire := Decode(data)
-			if expire != 0 && current > int64(expire) {
-				delete(s.mapping, h)
-				s.remapping[addr] = sizeb
+		if data, ok := ds.recordMap[h]; ok {
+			addr, sizeb, expire := record_meta.Decode(data)
+			if expire != 0 && currentSec > int64(expire) {
+				delete(ds.recordMap, h)
+				ds.freeSpaces[addr] = sizeb
 			}
 		}
 		bulkCount++
 		if bulkCount >= totalBulk {
-			s.Unlock()
+			ds.Unlock()
 			time.Sleep(time.Duration(sleepTime) * time.Millisecond)
-			s.Lock()
+			ds.Lock()
 			bulkCount = 0
 		}
 	}
-
-	s.Unlock()
-
+	ds.Unlock()
 	return nil
 }
 
-func (s *Shard) Set(k, v []byte, h, expire uint32) error {
-	s.Lock()
-	defer s.Unlock()
-	return s.write(k, v, h, expire)
+func (ds *DataShard) Set(key, value []byte, hash, expire uint32) error {
+	ds.Lock()
+	defer ds.Unlock()
+	return ds.writeRecord(key, value, hash, expire)
 }
 
-func (s *Shard) write(k, v []byte, h, expire uint32) error {
-	var err error
-	s.useFsync = true
-	header, b := marshal(k, v, expire)
-	// write at file
-	pos := int64(-1)
+// writeRecord write data on dist and in memory map
+func (ds *DataShard) writeRecord(key, value []byte, hash, expire uint32) error {
+	ds.syncFSync = true
+	header, recordBytes := record_header.Marshal(key, value, expire)
+	var pos int64 = -1
 
-	if data, ok := s.mapping[h]; ok {
-		addr, size, _ := Decode(data)
+	if meta, ok := ds.recordMap[hash]; ok {
+		addr, size, _ := record_meta.Decode(meta)
 		bb := make([]byte, 1<<size)
-		_, err := s.f.ReadAt(bb, int64(addr))
-		if err != nil {
+
+		if _, err := ds.file.ReadAt(bb, int64(addr)); err != nil {
 			return err
 		}
-		oldHeader, key, _ := unmarshal(bb)
-		if !bytes.Equal(key, k) {
+
+		oldHeader, storedKey, _ := record_header.Unmarshal(bb)
+		if !bytes.Equal(key, storedKey) {
 			return common.ErrCollision
 		}
 
-		if oldHeader.sizeByte == header.sizeByte {
+		if oldHeader.SizeByte == header.SizeByte {
 			pos = int64(addr)
 		} else {
-			delByte := []byte{deleted}
-			_, err := s.f.WriteAt(delByte, int64(addr+1))
-			if err != nil {
+			// Mark existing record as RecordDeletedMarker
+			if _, err := ds.file.WriteAt([]byte{record_header.RecordDeletedMarker}, int64(addr+1)); err != nil {
 				return err
 			}
-			s.remapping[addr] = oldHeader.sizeByte
-
-			for addrKey, sizeh := range s.remapping {
-				if sizeh == header.sizeByte {
+			ds.freeSpaces[addr] = oldHeader.SizeByte
+			// Try to find free space matching the new record's size
+			for addrKey, sizeh := range ds.freeSpaces {
+				if sizeh == header.SizeByte {
 					pos = int64(addrKey)
-					delete(s.remapping, addrKey)
+					delete(ds.freeSpaces, addrKey)
 					break
 				}
 			}
@@ -342,47 +333,50 @@ func (s *Shard) write(k, v []byte, h, expire uint32) error {
 	}
 
 	if pos < 0 {
-		// append to the end of file
-		pos, _ = s.f.Seek(0, 2)
+		var err error
+		pos, err = ds.file.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
 	}
 
-	_, err = s.f.WriteAt(b, pos)
-	if err != nil {
+	if _, err := ds.file.WriteAt(recordBytes, pos); err != nil {
 		return err
 	}
 
-	s.mapping[h] = Encode(uint32(pos), header.sizeByte, header.expire)
+	ds.recordMap[hash] = record_meta.Encode(uint32(pos), header.SizeByte, header.Expire)
 	return nil
 }
 
-func (s *Shard) Touch(k []byte, h, expire uint32) error {
-	s.Lock()
-	defer s.Unlock()
+// Touch updates the expiration time of an existing record
+func (ds *DataShard) Touch(key []byte, hash, expire uint32) error {
+	ds.Lock()
+	defer ds.Unlock()
 
-	if data, ok := s.mapping[h]; ok {
-		addr, size, _ := Decode(data)
+	if data, ok := ds.recordMap[hash]; ok {
+		addr, size, _ := record_meta.Decode(data)
 		bb := make([]byte, 1<<size)
-		_, err := s.f.ReadAt(bb, int64(addr))
-		if err != nil {
+
+		if _, err := ds.file.ReadAt(bb, int64(addr)); err != nil {
 			return err
 		}
-		header, key, _ := unmarshal(bb)
-		if !bytes.Equal(key, k) {
+
+		header, storedKey, _ := record_header.Unmarshal(bb)
+		if !bytes.Equal(storedKey, key) {
 			return common.ErrCollision
 		}
 
-		if header.expire != 0 && int64(header.expire) < time.Now().Unix() {
-			return errors.New("invalid key")
+		if header.Expire != 0 && int64(header.Expire) < time.Now().Unix() {
+			return errors.New("key expired")
 		}
 
-		header.expire = expire
-		b := make([]byte, sizeHead)
-		writeHeader(b, header)
-		_, err = s.f.WriteAt(b, int64(addr))
-		if err != nil {
+		header.Expire = expire
+		b := make([]byte, record_header.HeaderFixedSize)
+		record_header.WriteRecordHeader(b, header)
+		if _, err := ds.file.WriteAt(b, int64(addr)); err != nil {
 			return err
 		}
-		s.useFsync = true
+		ds.syncFSync = true
 	} else {
 		return common.ErrKeyNotFound
 	}
@@ -390,36 +384,35 @@ func (s *Shard) Touch(k []byte, h, expire uint32) error {
 	return nil
 }
 
-func (s *Shard) Get(k []byte, h uint32) ([]byte, *Header, error) {
-	s.Lock()
-	defer s.Unlock()
-	return s.get(k, h)
+func (ds *DataShard) Get(key []byte, hash uint32) ([]byte, *record_header.RecordHeader, error) {
+	ds.Lock()
+	defer ds.Unlock()
+	return ds.get(key, hash)
 }
 
-func (s *Shard) get(k []byte, h uint32) ([]byte, *Header, error) {
-	if data, ok := s.mapping[h]; ok {
-		addr, size, expire := Decode(data)
+func (ds *DataShard) get(key []byte, hash uint32) ([]byte, *record_header.RecordHeader, error) {
+	if data, ok := ds.recordMap[hash]; ok {
+		addr, size, expire := record_meta.Decode(data)
 
 		if expire != 0 && int64(expire) < time.Now().Unix() {
-			delete(s.mapping, h)
-			s.remapping[addr] = size
+			delete(ds.recordMap, hash)
+			ds.freeSpaces[addr] = size
 			return nil, nil, errors.New("key expired")
 		}
 
 		bb := make([]byte, 1<<size)
-		_, err := s.f.ReadAt(bb, int64(addr))
-		if err != nil {
+		if _, err := ds.file.ReadAt(bb, int64(addr)); err != nil {
 			return nil, nil, err
 		}
 
-		header, key, val := unmarshal(bb)
-		if !bytes.Equal(key, k) {
+		header, storedKey, val := record_header.Unmarshal(bb)
+		if !bytes.Equal(storedKey, key) {
 			return nil, nil, common.ErrCollision
 		}
 
-		if header.expire != 0 && int64(header.expire) < time.Now().Unix() {
-			delete(s.mapping, h)
-			s.remapping[addr] = size
+		if header.Expire != 0 && int64(header.Expire) < time.Now().Unix() {
+			delete(ds.recordMap, hash)
+			ds.freeSpaces[addr] = size
 			return nil, nil, errors.New("key expired")
 		}
 
@@ -429,101 +422,88 @@ func (s *Shard) get(k []byte, h uint32) ([]byte, *Header, error) {
 	return nil, nil, common.ErrKeyNotFound
 }
 
-func (s *Shard) Close() error {
-	forceExit = true
-	s.Lock()
-	defer s.Unlock()
-	return s.f.Close()
-}
-
-func (s *Shard) FileSize() (int64, error) {
-	s.Lock()
-	defer s.Unlock()
-	f, err := s.f.Stat()
-	if err != nil {
-		return -1, err
-	}
-	return f.Size(), nil
-}
-
-func (s *Shard) Delete(k []byte, h uint32) (bool, error) {
-	s.Lock()
-	defer s.Unlock()
-	if data, ok := s.mapping[h]; ok {
-		addr, size, _ := Decode(data)
+func (ds *DataShard) Delete(key []byte, hash uint32) (bool, error) {
+	ds.Lock()
+	defer ds.Unlock()
+	if data, ok := ds.recordMap[hash]; ok {
+		addr, size, _ := record_meta.Decode(data)
 		bb := make([]byte, 1<<size)
-		_, err := s.f.ReadAt(bb, int64(addr))
-		if err != nil {
+
+		if _, err := ds.file.ReadAt(bb, int64(addr)); err != nil {
 			return false, err
 		}
-		header, key, _ := unmarshal(bb)
-		if !bytes.Equal(key, k) {
+
+		header, storedKey, _ := record_header.Unmarshal(bb)
+		if !bytes.Equal(storedKey, key) {
 			return false, common.ErrCollision
 		}
+
 		// found the key now can delete it
-		_, err = s.f.WriteAt([]byte{deleted}, int64(addr+1))
-		if err != nil {
+		if _, err := ds.file.WriteAt([]byte{record_header.RecordDeletedMarker}, int64(addr+1)); err != nil {
 			return false, err
 		}
-		delete(s.mapping, h)
-		s.remapping[addr] = header.sizeByte
+
+		delete(ds.recordMap, hash)
+		ds.freeSpaces[addr] = header.SizeByte
 		return true, nil
 	}
 	return false, nil
 }
 
-func (s *Shard) Counter(k []byte, h uint32, v uint64, inc bool) (uint64, error) {
-	s.Lock()
-	defer s.Unlock()
-	old, header, err := s.get(k, h)
+// Counter updates a numeric counter stored as an 8-byte value
+func (ds *DataShard) Counter(key []byte, hash uint32, delta uint64, increment bool) (uint64, error) {
+	ds.Lock()
+	defer ds.Unlock()
+
+	oldVal, header, err := ds.get(key, hash)
 	expire := uint32(0)
 	if header != nil {
-		expire = header.expire
+		expire = header.Expire
 	}
 
 	if errors.Is(err, common.ErrKeyNotFound) {
-		old = make([]byte, 8)
+		oldVal = make([]byte, 8)
 		err = nil
 	}
 
-	if len(old) != 8 {
-		return 0, errors.New("wrong format")
+	if len(oldVal) != 8 {
+		return 0, errors.New("invalid counter format")
 	}
 
 	if err != nil {
 		return 0, err
 	}
 
-	cnt := binary.BigEndian.Uint64(old)
-	if inc {
-		cnt += v
+	cnt := binary.BigEndian.Uint64(oldVal)
+	if increment {
+		cnt += delta
 	} else {
-		cnt -= v
+		cnt -= delta
 	}
-
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, cnt)
-	err = s.write(k, b, h, expire)
+	err = ds.writeRecord(key, b, hash, expire)
 	return cnt, err
 }
 
-func (s *Shard) Count() int {
-	s.RLock()
-	defer s.RUnlock()
-	return len(s.mapping)
+// Count returns the number of active records
+func (ds *DataShard) Count() int {
+	ds.RLock()
+	defer ds.RUnlock()
+	return len(ds.recordMap)
 }
 
-func (s *Shard) Backup(w io.Writer) error {
-	s.Lock()
-	defer s.Unlock()
+// Backup writes the shard's data to the provided writer
+func (ds *DataShard) Backup(w io.Writer) error {
+	ds.Lock()
+	defer ds.Unlock()
 
-	_, err := s.f.Seek(2, 0)
-	if err != nil {
+	if _, err := ds.file.Seek(2, 0); err != nil {
 		return err
 	}
 
 	for {
-		header, err := readHeader(s.f, currentShardVer)
+		header, err := record_header.ReadRecordHeader(ds.file, record_header.CurrentRecordVersion)
 		if err != nil {
 			return err
 		}
@@ -531,34 +511,51 @@ func (s *Shard) Backup(w io.Writer) error {
 			break
 		}
 
-		size := int(sizeHead) + int(header.valLength) + int(header.keyLength)
-		b := make([]byte, size)
-		writeHeader(b, header)
-		n, err := s.f.Read(b[sizeHead:])
+		size := int(record_header.HeaderFixedSize) + int(header.ValLength) + int(header.KeyLength)
+		buffer := make([]byte, size)
+		record_header.WriteRecordHeader(buffer, header)
+		n, err := ds.file.Read(buffer[record_header.HeaderFixedSize:])
 		if err != nil {
 			return err
 		}
 
-		if n != size-int(sizeHead) {
-			return fmt.Errorf("wrong file size format, got: %d, expect: %d", n, size-int(sizeHead))
+		if n != size-int(record_header.HeaderFixedSize) {
+			return fmt.Errorf("unexpected record size: got %d, expected %d", n, size-int(record_header.HeaderFixedSize))
 		}
 
-		shift := 1 << header.sizeByte
+		shift := 1 << header.SizeByte
 		// move cursor pointer
-		_, err = s.f.Seek(int64(shift-int(header.keyLength)-int(header.valLength)-int(sizeHead)), 1)
-		if err != nil {
+		if _, err = ds.file.Seek(int64(shift-int(header.KeyLength)-int(header.ValLength)-int(record_header.HeaderFixedSize)), io.SeekCurrent); err != nil {
 			return err
 		}
 
-		if header.status == deleted || (header.expire != 0 && int64(header.expire) < time.Now().Unix()) {
+		if header.Status == record_header.RecordDeletedMarker || (header.Expire != 0 && int64(header.Expire) < time.Now().Unix()) {
 			continue
 		}
 
-		_, err = w.Write(b)
-		if err != nil {
+		if _, err = w.Write(buffer); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// Close closes the underlying file
+func (ds *DataShard) Close() error {
+	ds.exitExpire = true
+	ds.Lock()
+	defer ds.Unlock()
+	return ds.file.Close()
+}
+
+// FileSize returns the current size of the shard file
+func (ds *DataShard) FileSize() (int64, error) {
+	ds.Lock()
+	defer ds.Unlock()
+	fi, err := ds.file.Stat()
+	if err != nil {
+		return -1, err
+	}
+	return fi.Size(), nil
 }

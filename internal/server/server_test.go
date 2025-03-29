@@ -68,7 +68,7 @@ func (t *testNyx) Prepend(_ common.SetRequest) error {
 	return t.prependRes
 }
 func (t *testNyx) Delete(_ common.DeleteRequest) error {
-	t.callMap["Delete"] = nil
+	t.callMap["Remove"] = nil
 	return t.deleteRes
 }
 func (t *testNyx) Touch(_ common.TouchRequest) error {
@@ -162,8 +162,8 @@ func Test_Server(t *testing.T) {
 		})
 	})
 
-	t.Run("Delete", func(t *testing.T) {
-		testSuccess(t, "Delete", common.RequestDelete, common.DeleteRequest{
+	t.Run("Remove", func(t *testing.T) {
+		testSuccess(t, "Remove", common.RequestDelete, common.DeleteRequest{
 			Key: []byte("key"),
 		})
 	})

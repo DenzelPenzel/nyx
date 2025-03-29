@@ -4,8 +4,9 @@ import (
 	"context"
 	"os"
 
+	"github.com/DenzelPenzel/nyx/config"
 	"github.com/DenzelPenzel/nyx/internal/app"
-	"github.com/DenzelPenzel/nyx/internal/config"
+	"github.com/DenzelPenzel/nyx/internal/common"
 	"github.com/DenzelPenzel/nyx/internal/logging"
 	"github.com/urfave/cli"
 	"go.uber.org/zap"
@@ -14,7 +15,6 @@ import (
 func main() {
 	ctx := context.Background()
 	logger := logging.WithContext(ctx)
-
 	a := cli.NewApp()
 	a.Name = "fast db"
 	a.Flags = []cli.Flag{
@@ -22,38 +22,6 @@ func main() {
 			Name:  "env",
 			Value: "local",
 			Usage: "Set the application env",
-		},
-		// db
-		&cli.StringFlag{
-			Name:  "data-dir",
-			Value: "-data-tmp-",
-			Usage: "Set the db dirname",
-		},
-		&cli.StringFlag{
-			Name:  "restore",
-			Value: "",
-			Usage: "Set the backup file name for load",
-		},
-		// server config
-		&cli.StringFlag{
-			Name:  "slave-addr",
-			Value: "127.0.0.1:4002",
-			Usage: "slave TCP address",
-		},
-		&cli.StringFlag{
-			Name:  "backup",
-			Value: "",
-			Usage: "specify backup filename",
-		},
-		&cli.StringFlag{
-			Name:  "hostname",
-			Value: "localhost:4001",
-			Usage: "Addr to listen on for external connections",
-		},
-		&cli.StringFlag{
-			Name:  "db-expire-interval",
-			Value: "60s",
-			Usage: "Set the expiration interval for the keys",
 		},
 	}
 	a.Usage = "Nyx kvs"
@@ -69,11 +37,12 @@ func main() {
 
 // RunFastCache ... Application entry point
 func RunFastCache(c *cli.Context) error {
-	cfg := config.NewConfig(c)
+	appEnv := c.String("env")
+	cfg, err := config.LoadConfig(appEnv)
 	ctx := context.Background()
 
 	// Init logger
-	logging.New(cfg.Environment)
+	logging.New(common.Env(cfg.App.Env))
 	logger := logging.WithContext(ctx)
 
 	a, shutDown, err := app.NewFastCacheApp(ctx, cfg)
