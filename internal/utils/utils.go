@@ -101,3 +101,28 @@ func Connect(h *net.TCPAddr) (net.Conn, error) {
 	}
 	return conn, nil
 }
+
+func PathExists(path string) bool {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true // path exists
+	}
+	if os.IsNotExist(err) {
+		return false // path does not exist
+	}
+	// handle other errors, e.g., permission denied
+	return false
+}
+
+func RandomString(n int) string {
+	var alphanumerics = []rune("abcdefghijklmnopqrstuvwxyz0123456789")
+	s := make([]rune, n)
+	for i := range s {
+		randomIndex, err := rand.Int(rand.Reader, big.NewInt(int64(len(alphanumerics))))
+		if err != nil {
+			return ""
+		}
+		s[i] = alphanumerics[randomIndex.Int64()]
+	}
+	return string(s)
+}

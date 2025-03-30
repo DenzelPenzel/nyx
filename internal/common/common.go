@@ -16,22 +16,8 @@ const (
 
 const VersionString = "0.1"
 
-type DBHandler interface {
-	Set(req SetRequest) error
-	Add(req SetRequest) error
-	Replace(req SetRequest) error
-	Append(req SetRequest) error
-	Prepend(req SetRequest) error
-	Delete(req DeleteRequest) error
-	Touch(req TouchRequest) error
-	Get(req GetRequest) error
-	GetE(req GetRequest) error
-	Gat(req GATRequest) error
-	Noop(req NoopRequest) error
-	Quit(req QuitRequest) error
-	Version(req VersionRequest) error
-	Unknown(req Request) error
-	Error(req Request, reqType RequestType, err error)
+type GenericResponse struct {
+	Error error
 }
 
 // Common metrics used across packages
@@ -286,6 +272,11 @@ type GetResponse struct {
 	Flags  uint32
 	Miss   bool
 	Quiet  bool
+}
+
+type FsmGetResponse struct {
+	Result []GetResponse
+	Err    error
 }
 
 // GetEResponse is used in the GetE protocol extension

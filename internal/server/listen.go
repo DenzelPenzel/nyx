@@ -9,7 +9,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/DenzelPenzel/nyx/internal/db"
 	"github.com/DenzelPenzel/nyx/internal/logging"
 	"github.com/DenzelPenzel/nyx/internal/nyx"
 	"github.com/DenzelPenzel/nyx/internal/proto"
@@ -82,7 +81,7 @@ func shutdown(conn []io.Closer, err error) {
 	}
 }
 
-func ListenAndServe(ctx context.Context, l ListenConst, db db.DB, n nyx.NConst) {
+func ListenAndServe(ctx context.Context, l ListenConst, storage nyx.DBHandler) {
 	logger := logging.WithContext(ctx)
 	ps := []proto.Components{textprot.Components}
 
@@ -107,7 +106,7 @@ func ListenAndServe(ctx context.Context, l ListenConst, db db.DB, n nyx.NConst) 
 		}
 
 		if err != nil {
-			logger.Fatal("Failed to create handler", zap.Error(err))
+			logger.Fatal("Failed to create storage", zap.Error(err))
 		}
 
 		go func() {
@@ -141,7 +140,8 @@ func ListenAndServe(ctx context.Context, l ListenConst, db db.DB, n nyx.NConst) 
 				responder = p.NewResponder(remoteWriter)
 			}
 
-			server := NewServer([]io.Closer{remote}, reqParser, n(db, responder))
+			storage.SetResponder(responder)
+			server := NewServer([]io.Closer{remote}, reqParser, storage)
 
 			go server.Loop()
 		}()

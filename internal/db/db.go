@@ -50,7 +50,7 @@ type db struct {
 	store     *store.DataStore
 }
 
-func NewDB(ctx context.Context, cfg config.DBConfig) (DB, error) {
+func NewDB(ctx context.Context, cfg *config.DBConfig) (DB, error) {
 	d := &db{
 		ctx:       ctx,
 		slaveAddr: cfg.Backup,
