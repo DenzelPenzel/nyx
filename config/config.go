@@ -1,51 +1,146 @@
 package config
 
 import (
-	"fmt"
-	"io/fs"
+	"net"
+	"path/filepath"
+	"strings"
+	"time"
 
-	env "github.com/caarlos0/env/v9"
-	"github.com/joho/godotenv"
-
-	"github.com/pkg/errors"
+	"github.com/DenzelPenzel/nyx/internal/common"
+	"github.com/DenzelPenzel/nyx/internal/utils"
+	"github.com/urfave/cli"
 )
 
 type Config struct {
-	App AppConfig
-	DB  DBConfig
+	Environment   common.Env
+	CPUProfile    string
+	ServerConfig  *ServerConfig
+	StorageConfig *StorageConfig
 }
 
-func LoadConfig(appEnv string) (*Config, error) {
-	envFile := fmt.Sprintf(".env.%s", appEnv)
-	err := godotenv.Load(envFile)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("error loading environment file %s: %w", envFile, err)
+// ServerConfig server configuration options
+type ServerConfig struct {
+	SocketAddr    net.Addr
+	HTTPAddr      net.Addr
+	HTTPAdvertise *net.TCPAddr
+
+	JoinServerHost string
+	JoinServerPort int
+
+	AllowedOrigins []string
+	AllowedMethods []string
+	AllowedHeaders []string
+}
+
+type StorageConfig struct {
+	// DB config
+	DBCfg *DBConfig
+
+	// raft working dir
+	RaftDir string
+
+	// Node ID
+	RaftID string
+
+	// RaftAddr is the RPC address used by Nomad. This should be reachable
+	// by the other servers and clients
+	RaftAddr *net.TCPAddr
+
+	// RaftAdvertise is the address that is advertised to client nodes for
+	// the RPC endpoint. This can differ from the RPC address, if for example
+	// the RaftAddr is unspecified "0.0.0.0:4646", but this address must be
+	// reachable
+	RaftAdvertise *net.TCPAddr
+
+	RaftHeartbeatTimeout time.Duration
+
+	// Join list of address
+	Join string
+
+	RaftElectionTimeout  time.Duration
+	RaftApplyTimeout     time.Duration
+	RaftOpenTimeout      time.Duration
+	RaftSnapThreshold    uint64
+	RaftShutdownOnRemove bool
+}
+
+type DBConfig struct {
+	ExpireIntervalInSeconds int
+	Dir                     string
+	Restore                 string
+	Backup                  string
+}
+
+func LoadConfig(c *cli.Context) *Config {
+	dataPath := c.Args()[0]
+
+	dbFilename := c.String("db-filename")
+	dbRestore := c.String("db-restore")
+	dbBackup := c.String("db-backup")
+	ExpireIntervalInSeconds := c.Int("db-expire-interval")
+
+	env := c.String("env")
+
+	httpAddr, _ := utils.GetTCPAddr(c.String("server-addr"))
+	socketAddr, _ := utils.GetTCPAddr(c.String("socket-addr"))
+	httpAdvertise, _ := utils.GetTCPAddr(c.String("server-advertise"))
+
+	cpuProfile := c.String("cpu_profile")
+
+	raftAddr, _ := utils.GetTCPAddr(c.String("raft-addr"))
+	raftAdvertise, _ := utils.GetTCPAddr(c.String("raft-advertise"))
+
+	raftNodeID := c.String("node-id")
+	if raftNodeID == "" {
+		raftNodeID = raftAddr.String()
 	}
 
-	cfg := Config{}
-	if err := env.Parse(&cfg); err != nil {
-		return nil, err
+	allowedOrigins := strings.Split(c.String("allowed-origins"), ",")
+	allowedMethods := strings.Split(c.String("allowed-methods"), ",")
+	allowedHeaders := strings.Split(c.String("allowed-headers"), ",")
+
+	raftHeartbeatTimeout, _ := time.ParseDuration(c.String("raft-heartbeat-timeout"))
+	raftElectionTimeout, _ := time.ParseDuration(c.String("raft-election-timeout"))
+	raftApplyTimeout, _ := time.ParseDuration(c.String("raft-apply-timeout"))
+	raftOpenTimeout, _ := time.ParseDuration(c.String("raft-open-timeout"))
+	raftSnapThreshold := c.Uint64("raft-snap-threshold")
+	raftShutdownOnRemove := c.Bool("raft-shutdown-on-remove")
+
+	join := c.String("join")
+
+	config := &Config{
+		Environment: common.Env(env),
+		CPUProfile:  cpuProfile,
+
+		ServerConfig: &ServerConfig{
+			SocketAddr:     socketAddr,
+			HTTPAddr:       httpAddr,
+			HTTPAdvertise:  httpAdvertise,
+			AllowedOrigins: allowedOrigins,
+			AllowedMethods: allowedMethods,
+			AllowedHeaders: allowedHeaders,
+		},
+
+		StorageConfig: &StorageConfig{
+			DBCfg: &DBConfig{
+				Dir:                     filepath.Join(dataPath, dbFilename),
+				ExpireIntervalInSeconds: ExpireIntervalInSeconds,
+				Restore:                 dbRestore,
+				Backup:                  dbBackup,
+			},
+			RaftID:               raftNodeID,
+			RaftDir:              dataPath,
+			RaftAddr:             raftAddr,
+			RaftAdvertise:        raftAdvertise,
+			RaftHeartbeatTimeout: raftHeartbeatTimeout,
+			RaftElectionTimeout:  raftElectionTimeout,
+			RaftApplyTimeout:     raftApplyTimeout,
+			RaftOpenTimeout:      raftOpenTimeout,
+			RaftSnapThreshold:    raftSnapThreshold,
+			RaftShutdownOnRemove: raftShutdownOnRemove,
+			Join:                 join,
+		},
 	}
 
-	if cfg.App.IsDebug {
-		fmt.Println("\nLoading environment configuration:")
-	}
-
-	// handle app environments
-	switch cfg.App.Env {
-	case "development":
-	case "main":
-	case "staging":
-	default:
-		return nil, errors.Errorf("APP_ENV (=%v) is not set to one of \"development\", \"main\", \"staging\"", cfg.App.Env)
-	}
-
-	if cfg.App.IsDebug {
-		fmt.Println("APP_")
-		fmt.Println("    ENV													 : ", cfg.App.Env)
-		fmt.Println("    BASE_ADDR   									 : ", cfg.App.BaseAddr)
-		fmt.Println("    DB_DIR  					  			 : ", cfg.DB.Dir)
-	}
-
-	return &cfg, nil
+	return config
 }
