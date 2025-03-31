@@ -1,13 +1,12 @@
 module github.com/DenzelPenzel/nyx
 
 go 1.22.0
-
 require (
 	github.com/gin-contrib/zap v1.1.4
 	github.com/gin-gonic/contrib v0.0.0-20250113154928-93b827325fec
 	github.com/gin-gonic/gin v1.10.0
 	github.com/google/btree v1.1.3
-	github.com/hashicorp/raft v1.6.0
+	github.com/hashicorp/raft v1.7.3
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/stretchr/testify v1.10.0
 	github.com/urfave/cli v1.22.16
@@ -25,6 +24,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/go-playground/validator/v10 v10.22.0 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
+	github.com/hashicorp/go-metrics v0.5.4 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.8 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
