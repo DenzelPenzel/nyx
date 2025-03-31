@@ -1,8 +1,23 @@
 # NYX
 
-NYX is a high-speed, experimental key-value database.
-NYX provides reliable storage for your critical data, ensuring constant availability.
-It is an ideal lightweight, distributed kvs data store for developers and operators alike.
+NYX is a high-speed, experimental key-value database designed for reliable, persistent storage and constant
+availability.
+
+It’s lightweight, scalable, and perfect for distributed environments where performance and fault tolerance
+are key.
+
+## Key Features
+
+- **High Performance:** Optimized for fast read and write operations.
+- **Persistent Storage:** Efficient disk writes with minimal overhead.
+- **Fault Tolerance:** Keeps running even if some nodes fail.
+- **Distributed Consensus:** Uses Raft to maintain a consistent state across nodes, ensuring that every change made to
+  the system is made to a quorum, or none at all.
+- **Scalability:** Easily add or restart nodes without extra configuration.
+- **Flexible Configuration:** Customize unique node IDs and network addresses.
+- **Multiple Protocols:** Supports TCP/UDP, HTTP API, and memcache text protocol.
+- **Large Data Support:** Efficiently handles multi-GB data sets.
+- **Built-In Testing Tools:** Includes utilities for load and correctness testing.
 
 ## Setup
 
@@ -12,7 +27,7 @@ To use the template, run the following command(s):
 
 2. Install all project golang dependencies by running `go mod download`.
 
-## To Run
+## Build and Run
 
 1. Compile NYX to machine binary by running the following project level command(s):
     * Using Make: `make build-app`
@@ -21,7 +36,7 @@ To use the template, run the following command(s):
     * Using Make: `make run-app`
     * Direct Call: `./bin/nyx`
 
-3. To test local KVS instance, open the new terminal console and run Netcat.
+3. To test local key-value-storage instance, open the new terminal console and run Netcat.
    ```bash
    $ nc localhost 4001
    > get abc
@@ -39,38 +54,43 @@ To use the template, run the following command(s):
    END
    ```
 
-## Key features
+## Cluster Configuration
 
-**Persistent storage**:
+NYX supports distributed clusters. Each node requires a unique ```-node-id``` along with designated HTTP and Raft
+addresses. Nodes join the cluster by connecting to the leader.
 
-- New records are written to disk
-- Each record has a minimum overhead of 8 bytes
-- It allocates space in 2^N and attempts to reuse space if the value grows
-- Allow to reuse space from deleted or evicted records
+### Example Cluster Setup
 
-**Developer-Friendly**:
+Assume you have three hosts: `host1`, `host2`, and `host3`.
 
-- Straightforward TCP/UDP protocol
+Start the Leader Node on host1:
 
-**Large data set support**:
+```
+host1:$ nyx -node-id 1 -http-addr host1:4001 -raft-addr host1:4002 ~/nyx-node
+```
 
-- Works well, even when managing multi-GB data sets
+Join a Node on host2:
 
-**Easy Backups**
+```
+host2:$ nyx -node-id 2 -http-addr host2:4001 -raft-addr host2:4002 -join http://host1:4001 ~/nyx-node
+```
 
-**Support memcache text protocol**
+Join a Node on host3:
 
-**Provide support for load and correctness testing client package**
+```
+host3:$ nyx -node-id 3 -http-addr host3:4001 -raft-addr host3:4002 -join http://host1:4001 ~/nyx-node
+```
+
+Nodes automatically rejoin the cluster on restart. Join requests for nodes already in the cluster are safely ignored.
+
+## Handling Failures and Growing the Cluster
+
+- Node Failures: If a node crashes, simply restart it. A three-node cluster tolerates the failure of one node, including
+  the leader.
+
+- Scaling Up: Add new nodes at any time by assigning a new unique node ID and having it join the cluster
 
 ## Contributing
 
 Nyx is an open source project, and contributions are gladly welcomed!
 To submit your changes please check pull request rules and open a pull request.
-
-
-
-
-
-
-
-
