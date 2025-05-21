@@ -5,7 +5,7 @@ go 1.22.0
 require (
 	github.com/gin-contrib/zap v1.1.4
 	github.com/gin-gonic/contrib v0.0.0-20250113154928-93b827325fec
-	github.com/gin-gonic/gin v1.10.0
+	github.com/gin-gonic/gin v1.10.1
 	github.com/google/btree v1.1.3
 	github.com/hashicorp/raft v1.6.0
 	github.com/spaolacci/murmur3 v1.1.0
