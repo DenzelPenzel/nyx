@@ -9,7 +9,7 @@ require (
 	github.com/google/btree v1.1.3
 	github.com/hashicorp/raft v1.6.0
 	github.com/spaolacci/murmur3 v1.1.0
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.0
 	github.com/urfave/cli v1.22.16
 	go.uber.org/zap v1.27.0
 )
